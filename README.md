@@ -1,8 +1,32 @@
 # runner-mobile-prototype
 
-## TL;DR
+## What is Runner?
 
-The first version of Runner mobile is a text-based companion app that can access your connected apps, but has **no awareness of your other sessions**. Primary purposes:
+Runner is a multi-session AI agent inbox — a desktop app (Electron + React) that lets you run, organize, and automate Claude-powered (and Codex-powered) sessions across connected apps. Sessions live in workspaces with a Todo / In Progress / Needs Review / Done workflow, plus flagging, dynamic statuses, and skills.
+
+Each workspace can connect to:
+- **MCP servers** (Craft, Linear, GitHub, Notion, custom)
+- **REST APIs** (Google: Gmail / Calendar / Drive, Slack, Microsoft, QuickBooks, Xero) brokered through the Conductor proxy
+- **Local sources** (filesystem, Obsidian vaults, git repos)
+- **Composio** and **Unipile** for messaging / unified-API coverage
+
+Runner has built-in heartbeat (proactive agent ticks), hooks (event- and cron-driven automation), and a custom skills layer. Backend runs on GCP / Cloud SQL; the desktop app talks to it through a managed-auth (WorkOS AuthKit) JWT flow. Published under **ArgoNavis Inc. / argonavis-labs** with bundle prefix `now.runner.*`.
+
+Repo layout (sibling at `/Users/yitongzhang/src/runner/`):
+```
+runner/
+├── apps/electron/      # desktop GUI (primary surface today)
+├── packages/           # shared core, types, agent runtime
+├── services/backend/   # Bun + TS backend on GCP
+├── tools/rc, tools/rci # admin CLI + CI utilities
+└── docs/               # architecture, design-docs, exec-plans
+```
+
+This prototype is **separate from the main monorepo** — it's the V0 mobile companion, not yet integrated. The desktop app remains the primary surface; mobile MVP is a disconnected text-based companion (see below).
+
+## Mobile MVP TL;DR
+
+The first version of Runner mobile is a text-based companion that can access your connected apps, but has **no awareness of your other sessions**. Primary purposes:
 
 - **P0:** Onboard and wow people who aren't at their laptop right now
 - **P1:** Act as a mobile companion to the main Runner desktop app
@@ -38,6 +62,16 @@ Working backward from **May 12, 2026** — a conference of ops leaders we're spo
 ### Non-goals (V0)
 
 - Any shared state between mobile and desktop.
+
+## Tech stack
+
+| Layer | Choice |
+|---|---|
+| Agent runtime | **Claude Managed Agents** (hosted harness, beta header `managed-agents-2026-04-01`) |
+| App infra (web sign-in, webhooks, scheduling) | **Railway** |
+| iMessage / RCS / SMS | **Photon Spectrum** (`spectrum-ts`) — leading per parent repo's [`messaging-channels-brief.md`](https://github.com/argonavis-labs/runner/blob/main/docs/design-docs/messaging-channels-brief.md) |
+
+Spectrum picked over Linq for the MVP: $0–$25 vs. ~$1k+ setup, OSS / self-host fallback, TypeScript SDK, and matches Anatomy of the parent runner's existing direction. Linq stays as the v1.5 swap once SOC 2 becomes a deal-breaker.
 
 ## Open questions
 
