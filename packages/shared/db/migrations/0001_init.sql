@@ -7,6 +7,7 @@ create table if not exists users (
   jwt_expires_at            timestamptz not null,
   managed_agent_id          text,
   managed_agent_version     integer,
+  managed_agent_vault_id    text,
   managed_agents_session_id text,
   last_user_msg_at          timestamptz,
   last_assistant_msg_at     timestamptz,

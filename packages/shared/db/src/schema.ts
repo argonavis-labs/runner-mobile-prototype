@@ -9,6 +9,7 @@ export const users = pgTable("users", {
   jwtExpiresAt: timestamp("jwt_expires_at", { withTimezone: true }).notNull(),
   managedAgentId: text("managed_agent_id"),
   managedAgentVersion: integer("managed_agent_version"),
+  managedAgentVaultId: text("managed_agent_vault_id"),
   managedAgentsSessionId: text("managed_agents_session_id"),
   lastUserMsgAt: timestamp("last_user_msg_at", { withTimezone: true }),
   lastAssistantMsgAt: timestamp("last_assistant_msg_at", { withTimezone: true }),

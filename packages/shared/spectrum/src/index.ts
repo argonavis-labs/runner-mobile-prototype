@@ -2,24 +2,23 @@
  * spectrum-ts wrapper for Photon iMessage.
  *
  * Spectrum is a long-running runtime — inbound messages arrive via an async
- * iterable (`app.messages`), not via webhooks. The server runs the consume
+ * iterable on `app.messages`, not via webhooks. The server runs the consume
  * loop in the background; outbound is dispatched by resolving a user by phone
- * and calling `space.send(...)`. The cron service uses outbound only.
+ * (`im.user(phoneNumber)`), opening a 1:1 space (`im.space(user)`), and
+ * calling `space.send(text)`. The cron service uses outbound only.
  *
- * The exact accessor for "sender's phone number" is provider-specific and the
- * public docs are vague. We try the iMessage-typed `im.phoneNumber(user)`
- * helper first; if that doesn't exist, fall back to `sender.id`. Verify
- * against a real inbound message during smoke testing — see TODO below.
+ * iMessage user `id` IS the canonical handle — for SMS/iMessage that's the
+ * E.164 phone number, for an Apple-ID handle it's the email. We treat
+ * `message.sender.id` as the user's address for our `users.phone_number`
+ * column. (Validated against spectrum-ts 1.2 typedefs in
+ * `dist/providers/imessage/index.d.ts` — the user schema is `z.object({})`,
+ * extended only by the base `User = { id: string }`.)
  */
 
-// Types in the published package are partial; we wrap loosely and verify at runtime.
-import { Spectrum } from "spectrum-ts";
+import { Spectrum, type SpectrumInstance, type Space, type Message } from "spectrum-ts";
 import { imessage } from "spectrum-ts/providers/imessage";
 
-export type SpectrumApp = {
-  messages: AsyncIterable<[unknown, unknown]>;
-  shutdown?: () => Promise<void>;
-};
+export type SpectrumApp = SpectrumInstance;
 
 export async function createSpectrumApp(): Promise<SpectrumApp> {
   const projectId = process.env.SPECTRUM_PROJECT_ID;
@@ -27,30 +26,25 @@ export async function createSpectrumApp(): Promise<SpectrumApp> {
   if (!projectId || !projectSecret) {
     throw new Error("SPECTRUM_PROJECT_ID and SPECTRUM_PROJECT_SECRET are required");
   }
-  const app = await Spectrum({
+  return Spectrum({
     projectId,
     projectSecret,
     providers: [imessage.config()],
   });
-  return app as SpectrumApp;
 }
 
-/**
- * Resolve an iMessage user by phone (E.164) and return their 1:1 space.
- * Cached per-process to avoid repeated lookups for the same number.
- */
-const _spaceCache = new WeakMap<object, Map<string, unknown>>();
+const _spaceCache = new WeakMap<SpectrumApp, Map<string, Space>>();
 
-async function resolveSpace(app: SpectrumApp, phoneNumber: string): Promise<unknown> {
-  let cache = _spaceCache.get(app as object);
+async function resolveSpace(app: SpectrumApp, phoneNumber: string): Promise<Space> {
+  let cache = _spaceCache.get(app);
   if (!cache) {
     cache = new Map();
-    _spaceCache.set(app as object, cache);
+    _spaceCache.set(app, cache);
   }
   const cached = cache.get(phoneNumber);
   if (cached) return cached;
 
-  const im = imessage(app as never);
+  const im = imessage(app);
   const user = await im.user(phoneNumber);
   const space = await im.space(user);
   cache.set(phoneNumber, space);
@@ -62,8 +56,8 @@ export async function sendOutbound(
   phoneNumber: string,
   text: string,
 ): Promise<void> {
-  const space = (await resolveSpace(app, phoneNumber)) as { send: (t: string) => Promise<void> };
-  await space.send(text);
+  const space = await resolveSpace(app, phoneNumber);
+  await app.send(space, text);
 }
 
 export type InboundHandler = (opts: {
@@ -81,28 +75,21 @@ export async function consumeInboundMessages(
   app: SpectrumApp,
   handler: InboundHandler,
 ): Promise<void> {
-  for await (const [space, message] of app.messages as AsyncIterable<[
-    { send: (t: string) => Promise<void> },
-    {
-      sender?: { id?: string };
-      content?: unknown;
-      reply?: (t: string) => Promise<void>;
-    },
-  ]>) {
+  for await (const [, message] of app.messages) {
     try {
-      // TODO: verify against a real inbound payload — try im.phoneNumber(message.sender)
-      // first if available, fall back to sender.id otherwise.
-      const phoneNumber = message.sender?.id ?? "";
-      const text = extractText(message.content);
+      const phoneNumber = message.sender.id;
+      const text = extractText(message);
 
-      const reply = message.reply
-        ? message.reply.bind(message)
-        : async (t: string) => {
-            await space.send(t);
-          };
+      const reply = async (t: string) => {
+        const out = await message.reply(t);
+        if (!out) throw new Error("reply returned undefined");
+      };
 
       if (!phoneNumber || !text) {
-        console.warn("inbound message missing phone or text", { phoneNumber, text });
+        console.warn("inbound skipped: missing phone or text", {
+          phoneNumber: phoneNumber || "<empty>",
+          hasText: text.length > 0,
+        });
         continue;
       }
 
@@ -113,15 +100,9 @@ export async function consumeInboundMessages(
   }
 }
 
-function extractText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .filter((b): b is { type: "text"; text: string } =>
-        typeof b === "object" && b !== null && (b as { type?: unknown }).type === "text",
-      )
-      .map((b) => b.text)
-      .join("");
-  }
+function extractText(message: Message): string {
+  // spectrum-ts Content is a discriminated union; we want the text variant.
+  const block = message.content;
+  if (block.type === "text") return block.text;
   return "";
 }
