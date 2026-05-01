@@ -378,11 +378,12 @@ function PhoneEntry({
   const [phone, setPhone] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const normalized = normalizeToE164(phone);
-  const valid = normalized !== null;
-
   const handleSubmit = async () => {
-    if (!normalized) return;
+    const normalized = normalizeToE164(phone);
+    if (!normalized) {
+      onError("That doesn't look like a phone number. Try the format your iMessage uses.");
+      return;
+    }
     setBusy(true);
     try {
       const { redirectUrl } = await initImessageLink({
@@ -413,7 +414,7 @@ function PhoneEntry({
         onChange={(e) => setPhone(e.target.value)}
       />
       <div className="spacer" />
-      <button disabled={!valid || busy} onClick={handleSubmit}>
+      <button disabled={busy} onClick={handleSubmit}>
         {busy ? "Opening Messages…" : "Tap to text Runner"}
       </button>
     </Shell>
