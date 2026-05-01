@@ -20,12 +20,13 @@ const SYSTEM_PROMPT =
   "You're Runner, an assistant texting via iMessage. You have access to the apps the user has connected. Be helpful and natural. Replies short by default. Always send messages to the user via the send_imessage tool — never reply with plain text.";
 
 const MODEL = "claude-opus-4-7";
+const BETA_HEADER = "managed-agents-2026-04-01";
 
 let _client: Anthropic | null = null;
 function client(): Anthropic {
   if (_client) return _client;
   _client = new Anthropic({
-    defaultHeaders: { "anthropic-beta": "managed-agents-2026-04-01" },
+    defaultHeaders: { "anthropic-beta": BETA_HEADER },
   });
   return _client;
 }
@@ -38,27 +39,33 @@ let _environmentId: string | null = process.env.MANAGED_AGENT_ENVIRONMENT_ID ?? 
  */
 export async function getEnvironmentId(): Promise<string> {
   if (_environmentId) return _environmentId;
-  // @ts-expect-error — beta surface, types may not include `environments` yet
   const env = await client().beta.environments.create({
     name: "runner-mobile",
     config: { type: "cloud", networking: { type: "unrestricted" } },
   });
   _environmentId = env.id;
-  return _environmentId!;
+  return _environmentId;
 }
+
+type McpServerConfig = {
+  type: "url";
+  name: string;
+  url: string;
+  authorization_token?: string;
+};
 
 function buildMcpServers(
   catalog: CatalogItem[],
   workspaceId: string,
   jwt: string,
-): Array<{ type: "url"; url: string; name: string; authorization_token?: string }> {
+): McpServerConfig[] {
   return catalog
     .filter((c) => c.status === "connected")
     .flatMap((c) =>
       c.connectedAccounts
         .filter((a) => a.state === "connected")
-        .map((a) => ({
-          type: "url" as const,
+        .map<McpServerConfig>((a) => ({
+          type: "url",
           name: a.accountIndex > 0 ? `${c.slug}-${a.accountIndex + 1}` : c.slug,
           url: mcpUrl(workspaceId, c.slug, a.accountIndex),
           authorization_token: jwt,
@@ -67,18 +74,18 @@ function buildMcpServers(
 }
 
 const SEND_IMESSAGE_TOOL = {
-  type: "custom",
+  type: "custom" as const,
   name: "send_imessage",
   description:
     "Send a message to the user via iMessage. This is the only way to communicate with the user. Call once per outgoing message.",
   input_schema: {
-    type: "object",
+    type: "object" as const,
     properties: {
       message: { type: "string", description: "The text to send to the user" },
     },
     required: ["message"],
   },
-} as const;
+};
 
 /**
  * Create or update the user's Managed Agent so its MCP servers reflect the
@@ -88,28 +95,34 @@ export async function ensureAgent(user: User, catalog: CatalogItem[]): Promise<s
   const mcpServers = buildMcpServers(catalog, user.workspaceId, user.jwt);
   const c = client();
 
-  if (user.managedAgentId) {
-    // @ts-expect-error — beta surface
-    await c.beta.agents.update(user.managedAgentId, {
+  if (user.managedAgentId && user.managedAgentVersion != null) {
+    // The SDK types accept loose tool/server arrays for the beta surface;
+    // we cast to satisfy the discriminated union without needing the full
+    // generated param types.
+    const updated = await c.beta.agents.update(user.managedAgentId, {
+      version: user.managedAgentVersion,
       system: SYSTEM_PROMPT,
       tools: [SEND_IMESSAGE_TOOL],
       mcp_servers: mcpServers,
-    });
+    } as unknown as Parameters<typeof c.beta.agents.update>[1]);
+    await db
+      .update(users)
+      .set({ managedAgentVersion: updated.version })
+      .where(eq(users.phoneNumber, user.phoneNumber));
     return user.managedAgentId;
   }
 
-  // @ts-expect-error — beta surface
   const agent = await c.beta.agents.create({
     name: `runner-mobile-${user.runnerUserId}`,
     model: MODEL,
     system: SYSTEM_PROMPT,
     tools: [SEND_IMESSAGE_TOOL],
     mcp_servers: mcpServers,
-  });
+  } as unknown as Parameters<typeof c.beta.agents.create>[0]);
 
   await db
     .update(users)
-    .set({ managedAgentId: agent.id })
+    .set({ managedAgentId: agent.id, managedAgentVersion: agent.version })
     .where(eq(users.phoneNumber, user.phoneNumber));
 
   return agent.id;
@@ -123,7 +136,6 @@ export async function ensureSession(user: User, agentId: string): Promise<string
   if (user.managedAgentsSessionId) return user.managedAgentsSessionId;
 
   const environmentId = await getEnvironmentId();
-  // @ts-expect-error — beta surface
   const session = await client().beta.sessions.create({
     agent: agentId,
     environment_id: environmentId,
@@ -149,10 +161,8 @@ export async function runTurn(opts: {
   onSendIMessage: (text: string) => Promise<void>;
 }): Promise<boolean> {
   const c = client();
-  // @ts-expect-error — beta surface
   const stream = await c.beta.sessions.events.stream(opts.sessionId);
 
-  // @ts-expect-error — beta surface
   await c.beta.sessions.events.send(opts.sessionId, {
     events: [
       {
@@ -160,7 +170,7 @@ export async function runTurn(opts: {
         content: [{ type: "text", text: opts.userMessage }],
       },
     ],
-  });
+  } as unknown as Parameters<typeof c.beta.sessions.events.send>[1]);
 
   const toolUseById = new Map<string, { name: string; input: Record<string, unknown> }>();
   let sentAnyImessage = false;
@@ -200,7 +210,6 @@ export async function runTurn(opts: {
             resultText = `error: unknown tool ${tu?.name ?? "<unknown>"}`;
           }
 
-          // @ts-expect-error — beta surface
           await c.beta.sessions.events.send(opts.sessionId, {
             events: [
               {
@@ -209,7 +218,7 @@ export async function runTurn(opts: {
                 content: [{ type: "text", text: resultText }],
               },
             ],
-          });
+          } as unknown as Parameters<typeof c.beta.sessions.events.send>[1]);
         }
         // After resolving custom tool calls, the session goes back to running
         // and emits more events. Continue draining the stream.

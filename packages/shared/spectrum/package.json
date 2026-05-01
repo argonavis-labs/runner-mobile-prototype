@@ -12,7 +12,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "spectrum-ts": "^0.5.0"
+    "spectrum-ts": "^1.2.0"
   },
   "devDependencies": {
     "typescript": "^5.7.3"

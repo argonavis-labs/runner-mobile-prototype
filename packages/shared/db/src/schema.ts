@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import { integer, pgTable, text, timestamp } from "drizzle-orm/pg-core";
 
 export const users = pgTable("users", {
   phoneNumber: text("phone_number").primaryKey(),
@@ -8,6 +8,7 @@ export const users = pgTable("users", {
   refreshToken: text("refresh_token").notNull(),
   jwtExpiresAt: timestamp("jwt_expires_at", { withTimezone: true }).notNull(),
   managedAgentId: text("managed_agent_id"),
+  managedAgentVersion: integer("managed_agent_version"),
   managedAgentsSessionId: text("managed_agents_session_id"),
   lastUserMsgAt: timestamp("last_user_msg_at", { withTimezone: true }),
   lastAssistantMsgAt: timestamp("last_assistant_msg_at", { withTimezone: true }),
