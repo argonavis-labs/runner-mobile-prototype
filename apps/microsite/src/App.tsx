@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   connect,
+  connectStatus,
   getCatalog,
   initImessageLink,
   listWorkspaces,
@@ -281,11 +282,41 @@ function Catalog({
     setBusy(slug);
     try {
       const res = await connect(auth.access_token, auth.workspace_id, slug);
-      if (res.status === "pending") {
-        window.location.href = res.redirectUrl;
-      } else {
+      if (res.status === "connected") {
         onUpdate();
+        return;
       }
+      // Open Composio's hosted OAuth page in a new tab/window so the
+      // microsite stays on screen and we can poll for completion.
+      const popup = window.open(res.redirectUrl, "_blank", "noopener,noreferrer");
+      if (!popup) {
+        // Popup blocked (rare in mobile Safari from click handlers, but possible).
+        // Fall back to navigating the current tab — user comes back manually.
+        window.location.href = res.redirectUrl;
+        return;
+      }
+
+      // Poll /api/v1/connect/status until we see `connected`, the user
+      // gives up, or 5 minutes elapses.
+      const deadline = Date.now() + 5 * 60_000;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 2500));
+        try {
+          const status = await connectStatus(auth.access_token, res.requestId);
+          if (status.status === "connected") {
+            onUpdate();
+            return;
+          }
+          if (status.status === "failed") {
+            setBusy(null);
+            return;
+          }
+        } catch {
+          // transient; keep polling
+        }
+      }
+      // Timeout — reset so user can retry.
+      setBusy(null);
     } catch (err) {
       console.error(err);
       setBusy(null);
@@ -299,6 +330,14 @@ function Catalog({
       <p className="eyebrow">Step 2 of 3</p>
       <h1 className="type-heading-1">Connect your apps.</h1>
       <p className="type-body">Pick at least one. The agent uses these to actually do things.</p>
+      {busy && (
+        <div className="banner">
+          <p>
+            We opened {visible.find((c) => c.slug === busy)?.name ?? busy} in a new tab. Authorize
+            there, then come back here — we'll detect it automatically.
+          </p>
+        </div>
+      )}
       <div className="catalog">
         {visible.map((c) => {
           const connected = c.status === "connected";
@@ -311,7 +350,11 @@ function Catalog({
               {c.icon ? <img src={c.icon} alt="" /> : <div style={{ width: 32, height: 32 }} />}
               <div className="name">{c.name}</div>
               <div className="status">
-                {connected ? "Connected" : busy === c.slug ? "Opening…" : "Connect"}
+                {connected
+                  ? "Connected"
+                  : busy === c.slug
+                    ? "Authorizing…"
+                    : "Connect"}
               </div>
             </div>
           );

@@ -55,6 +55,10 @@ export type ConnectResponse =
   | { status: "pending"; redirectUrl: string; requestId: string; sourceId: string }
   | { status: "connected"; redirectUrl: null; connectionId: string; sourceId: string };
 
+export type ConnectStatusResponse =
+  | { status: "connected"; connectionId: string; accountIndex: number }
+  | { status: "pending" | "failed" | "auth_required" | "permission_limited" | "degraded" | "provider_unavailable" | "setup_failed" };
+
 async function runnerRequest<T>(
   method: "GET" | "POST",
   path: string,
@@ -105,6 +109,16 @@ export async function connect(
   return runnerRequest("POST", "/api/v1/connect", {
     jwt,
     body: { slug, workspaceId },
+  });
+}
+
+export async function connectStatus(
+  jwt: string,
+  requestId: string,
+): Promise<ConnectStatusResponse> {
+  return runnerRequest("POST", "/api/v1/connect/status", {
+    jwt,
+    body: { requestId },
   });
 }
 
