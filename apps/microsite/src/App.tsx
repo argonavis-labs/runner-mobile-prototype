@@ -365,11 +365,9 @@ function Catalog({
           );
         })}
       </div>
-      {hasConnected && (
-        <button onClick={() => onUpdate()} style={{ marginTop: 8 }}>
-          Continue
-        </button>
-      )}
+      <button onClick={() => onUpdate()} style={{ marginTop: 8 }}>
+        {hasConnected ? "Continue" : "Skip for now"}
+      </button>
     </Shell>
   );
 }
