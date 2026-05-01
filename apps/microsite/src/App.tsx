@@ -403,7 +403,7 @@ function PhoneEntry({
   return (
     <Shell>
       <h1>Your phone number?</h1>
-      <p>The one your iMessage uses. US numbers can omit the country code.</p>
+      <p>The one your iMessage uses.</p>
       <input
         type="tel"
         autoFocus
@@ -412,11 +412,6 @@ function PhoneEntry({
         value={phone}
         onChange={(e) => setPhone(e.target.value)}
       />
-      {phone.length > 0 && (
-        <p style={{ fontSize: 13 }}>
-          {valid ? `Will use: ${normalized}` : "Doesn't look like a valid phone yet"}
-        </p>
-      )}
       <div className="spacer" />
       <button disabled={!valid || busy} onClick={handleSubmit}>
         {busy ? "Opening Messages…" : "Tap to text Runner"}
