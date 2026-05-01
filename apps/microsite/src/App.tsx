@@ -347,6 +347,27 @@ function Ready({
   );
 }
 
+/**
+ * Normalize whatever the user typed into a strict E.164 (`+<digits>`) form.
+ * - "+14155551234" → "+14155551234"
+ * - "14155551234"  → "+14155551234"
+ * - "4155551234"   → "+14155551234"   (assume US/Canada when 10 digits)
+ * - "(415) 555-1234" → "+14155551234"
+ * Returns null if the input doesn't normalize to a valid 11-15 digit number
+ * starting with a country code we recognize (any non-zero leading digit).
+ */
+function normalizeToE164(input: string): string | null {
+  const digits = input.replace(/\D/g, "");
+  if (digits.length === 10) {
+    // Bare 10-digit US/Canada — prepend +1.
+    return `+1${digits}`;
+  }
+  if (digits.length >= 11 && digits.length <= 15 && digits[0] !== "0") {
+    return `+${digits}`;
+  }
+  return null;
+}
+
 function PhoneEntry({
   auth,
   onError,
@@ -357,11 +378,11 @@ function PhoneEntry({
   const [phone, setPhone] = useState("");
   const [busy, setBusy] = useState(false);
 
-  // Light validation: E.164. We're not doing perfect localization in V0.
-  const e164 = /^\+[1-9]\d{7,14}$/;
-  const valid = e164.test(phone.trim());
+  const normalized = normalizeToE164(phone);
+  const valid = normalized !== null;
 
   const handleSubmit = async () => {
+    if (!normalized) return;
     setBusy(true);
     try {
       const { redirectUrl } = await initImessageLink({
@@ -370,7 +391,7 @@ function PhoneEntry({
         jwt_expires_at: auth.jwt_expires_at,
         runner_user_id: auth.runner_user_id,
         workspace_id: auth.workspace_id,
-        phone_number: phone.trim(),
+        phone_number: normalized,
       });
       window.location.href = redirectUrl;
     } catch (err) {
@@ -382,15 +403,20 @@ function PhoneEntry({
   return (
     <Shell>
       <h1>Your phone number?</h1>
-      <p>Format with country code, e.g. +14155551234. We'll open Messages with the right number prefilled.</p>
+      <p>The one your iMessage uses. US numbers can omit the country code.</p>
       <input
         type="tel"
         autoFocus
         autoComplete="tel"
-        placeholder="+14155551234"
+        placeholder="(415) 555-1234"
         value={phone}
         onChange={(e) => setPhone(e.target.value)}
       />
+      {phone.length > 0 && (
+        <p style={{ fontSize: 13 }}>
+          {valid ? `Will use: ${normalized}` : "Doesn't look like a valid phone yet"}
+        </p>
+      )}
       <div className="spacer" />
       <button disabled={!valid || busy} onClick={handleSubmit}>
         {busy ? "Opening Messages…" : "Tap to text Runner"}

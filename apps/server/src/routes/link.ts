@@ -4,8 +4,10 @@ import { db, users } from "@runner-mobile/db";
 import { listWorkspaces } from "@runner-mobile/runner-api";
 import { createSharedUser, redirectUrl } from "@runner-mobile/spectrum";
 
-// E.164: '+' followed by 8-15 digits.
-const e164 = z.string().regex(/^\+[1-9]\d{7,14}$/);
+// E.164: '+' then a country code (1-3 digits) + subscriber number, total
+// 11-15 digits. The microsite already normalizes user input; this is
+// defense in depth.
+const e164 = z.string().regex(/^\+[1-9]\d{10,14}$/);
 
 const linkInitSchema = z.object({
   access_token: z.string().min(1),
