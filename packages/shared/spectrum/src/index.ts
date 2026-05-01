@@ -68,14 +68,18 @@ export type InboundHandler = (opts: {
 
 /**
  * Consume the inbound message stream forever, calling `handler` for each
- * `[space, message]`. Errors in the handler are caught and logged so a single
- * bad message doesn't kill the loop.
+ * `[space, message]`. Each handler call is wrapped in `space.responding()`
+ * so iMessage shows the typing indicator while the agent is working —
+ * Spectrum starts/stops it for the duration of the wrapped function.
+ *
+ * Errors in the handler are caught and logged so a single bad message
+ * doesn't kill the loop.
  */
 export async function consumeInboundMessages(
   app: SpectrumApp,
   handler: InboundHandler,
 ): Promise<void> {
-  for await (const [, message] of app.messages) {
+  for await (const [space, message] of app.messages) {
     try {
       const phoneNumber = message.sender.id;
       const text = extractText(message);
@@ -93,7 +97,9 @@ export async function consumeInboundMessages(
         continue;
       }
 
-      await handler({ phoneNumber, text, reply });
+      await space.responding(async () => {
+        await handler({ phoneNumber, text, reply });
+      });
     } catch (err) {
       console.error("inbound handler failed:", err);
     }
