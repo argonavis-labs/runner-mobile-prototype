@@ -21,6 +21,7 @@ import type {
   AgentCreateParams,
   AgentUpdateParams,
   BetaManagedAgentsCustomToolParams,
+  BetaManagedAgentsMCPToolsetParams,
   BetaManagedAgentsURLMCPServerParams,
 } from "@anthropic-ai/sdk/resources/beta/agents/agents";
 import type {
@@ -82,6 +83,13 @@ type McpServerEntry = {
 function buildMcpServers(catalog: CatalogItem[], workspaceId: string): McpServerEntry[] {
   return catalog
     .filter((c) => c.status === "connected")
+    .filter((c) => {
+      // Exclude local (macOS — needs the user's Mac) and direct (Unipile —
+      // currently client-side only, not exposed as backend MCP). Both would
+      // be unreachable from the cloud container the agent runs in.
+      const bt = c.backendType;
+      return bt !== "local" && bt !== "direct";
+    })
     .flatMap((c) =>
       c.connectedAccounts
         .filter((a) => a.state === "connected")
@@ -110,6 +118,10 @@ const SEND_IMESSAGE_TOOL: BetaManagedAgentsCustomToolParams = {
  * Create or update the user's Managed Agent so its MCP servers reflect the
  * current catalog. Backend is no-op if nothing changed; we still bump the
  * stored version on a real change.
+ *
+ * For every MCP server declared, a matching `mcp_toolset` tool entry is
+ * required — the agent will reject the config otherwise (verified empirically:
+ * "mcp_servers [...] declared but no mcp_toolset in tools references them").
  */
 export async function ensureAgent(user: User, catalog: CatalogItem[]): Promise<string> {
   const c = client();
@@ -117,12 +129,17 @@ export async function ensureAgent(user: User, catalog: CatalogItem[]): Promise<s
     catalog,
     user.workspaceId,
   ).map((s) => ({ type: "url", name: s.name, url: s.url }));
+  const mcpToolsets: BetaManagedAgentsMCPToolsetParams[] = mcpServers.map((s) => ({
+    type: "mcp_toolset",
+    mcp_server_name: s.name,
+  }));
+  const tools = [SEND_IMESSAGE_TOOL, ...mcpToolsets];
 
   if (user.managedAgentId && user.managedAgentVersion != null) {
     const params: AgentUpdateParams = {
       version: user.managedAgentVersion,
       system: SYSTEM_PROMPT,
-      tools: [SEND_IMESSAGE_TOOL],
+      tools,
       mcp_servers: mcpServers,
     };
     const updated = await c.beta.agents.update(user.managedAgentId, params);
@@ -139,7 +156,7 @@ export async function ensureAgent(user: User, catalog: CatalogItem[]): Promise<s
     name: `runner-mobile-${user.runnerUserId}`,
     model: MODEL,
     system: SYSTEM_PROMPT,
-    tools: [SEND_IMESSAGE_TOOL],
+    tools,
     mcp_servers: mcpServers,
   };
   const agent = await c.beta.agents.create(createParams);
