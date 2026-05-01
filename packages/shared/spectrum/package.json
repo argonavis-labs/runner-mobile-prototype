@@ -1,0 +1,20 @@
+{
+  "name": "@runner-mobile/spectrum",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "spectrum-ts": "^0.5.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3"
+  }
+}

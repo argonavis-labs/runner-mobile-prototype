@@ -1,0 +1,36 @@
+# Railway service definitions. Add a Postgres plugin in the dashboard;
+# DATABASE_URL is provisioned automatically. Set the rest of the env vars
+# per-service from .env.example.
+#
+# We run TypeScript directly via tsx (no precompile step) for both server
+# and cron. The microsite is built by Vite then served via vite preview.
+
+[[services]]
+name = "server"
+[services.build]
+builder = "NIXPACKS"
+buildCommand = "pnpm install --frozen-lockfile"
+[services.deploy]
+startCommand = "pnpm --filter @runner-mobile/db migrate && pnpm --filter @runner-mobile/server start"
+healthcheckPath = "/healthz"
+healthcheckTimeout = 30
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
+
+[[services]]
+name = "microsite"
+[services.build]
+builder = "NIXPACKS"
+buildCommand = "pnpm install --frozen-lockfile && pnpm --filter @runner-mobile/microsite build"
+[services.deploy]
+startCommand = "pnpm --filter @runner-mobile/microsite preview --host 0.0.0.0 --port $PORT"
+
+[[services]]
+name = "cron"
+[services.build]
+builder = "NIXPACKS"
+buildCommand = "pnpm install --frozen-lockfile"
+[services.deploy]
+cronSchedule = "*/15 * * * *"
+startCommand = "pnpm --filter @runner-mobile/cron start"
+restartPolicyType = "NEVER"

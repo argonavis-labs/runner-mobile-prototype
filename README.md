@@ -2,6 +2,39 @@
 
 V0 prototype for Runner mobile — a text-based companion that puts your Runner agent in iMessage.
 
+## Repo layout
+
+```
+apps/
+  microsite/        # Vite + React onboarding SPA
+  server/           # Express + Spectrum runtime (inbound + link mint + cron tick)
+  cron/             # Railway cron job — HTTP-pokes the server
+packages/shared/
+  db/               # Drizzle schema, migrations, pg client
+  runner-api/       # Typed client for Runner backend (auth, catalog, MCP URL)
+  managed-agents/   # Claude Managed Agents wrapper, send_imessage tool, turn loop
+  spectrum/         # spectrum-ts wrapper (inbound consume + outbound send)
+```
+
+Stack: pnpm workspaces, TypeScript via tsx (no precompile step), Postgres, Drizzle, Express, Vite + React, `@anthropic-ai/sdk` beta managed-agents, `spectrum-ts`.
+
+## Local dev
+
+```bash
+docker compose up -d postgres
+cp .env.example .env       # fill in real values
+pnpm install
+pnpm db:migrate
+pnpm dev:server            # :3001
+pnpm dev:microsite         # :5173
+```
+
+For end-to-end testing, expose the server via ngrok / Cloudflare tunnel so Spectrum's cloud can reach it.
+
+## Production (Railway)
+
+`railway.toml` defines three services (server, microsite, cron) plus a Postgres plugin. Set env vars per-service from `.env.example`. Cron runs every 15 min and POSTs `/api/cron/tick` with `CRON_SHARED_SECRET`.
+
 ## What is Runner?
 
 Runner is a multi-session AI agent inbox — a desktop app (Electron + React) that lets you run, organize, and automate Claude-powered (and Codex-powered) sessions across connected apps. Sessions live in workspaces with a Todo / In Progress / Needs Review / Done workflow, plus flagging, dynamic statuses, and skills.

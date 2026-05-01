@@ -1,0 +1,351 @@
+import { useEffect, useState } from "react";
+import {
+  connect,
+  getCatalog,
+  listWorkspaces,
+  magicAuthStart,
+  magicAuthVerify,
+  mintLinkToken,
+  type CatalogItem,
+} from "./api.ts";
+import { clearAuth, loadAuth, saveAuth, type AuthState } from "./state.ts";
+
+type View =
+  | { kind: "landing" }
+  | { kind: "email" }
+  | { kind: "code"; email: string }
+  | { kind: "loading"; auth: AuthState; message: string }
+  | { kind: "catalog"; auth: AuthState; catalog: CatalogItem[] }
+  | { kind: "ready"; auth: AuthState; catalog: CatalogItem[] }
+  | { kind: "error"; message: string };
+
+const RUNNER_IMESSAGE_NUMBER = import.meta.env.VITE_RUNNER_IMESSAGE_NUMBER ?? "+15555555555";
+
+export function App() {
+  const [view, setView] = useState<View>({ kind: "landing" });
+
+  useEffect(() => {
+    // Boot: if we have stored auth, jump straight to loading.
+    const saved = loadAuth();
+    if (saved) {
+      setView({ kind: "loading", auth: saved, message: "Loading your apps…" });
+      void hydrate(saved, setView);
+    }
+  }, []);
+
+  switch (view.kind) {
+    case "landing":
+      return <Landing onStart={() => setView({ kind: "email" })} />;
+    case "email":
+      return (
+        <EmailEntry
+          onSent={(email) => setView({ kind: "code", email })}
+          onError={(message) => setView({ kind: "error", message })}
+        />
+      );
+    case "code":
+      return (
+        <CodeEntry
+          email={view.email}
+          onVerified={(auth) => {
+            saveAuth(auth);
+            setView({ kind: "loading", auth, message: "Loading your apps…" });
+            void hydrate(auth, setView);
+          }}
+          onError={(message) => setView({ kind: "error", message })}
+        />
+      );
+    case "loading":
+      return <Loading message={view.message} />;
+    case "catalog":
+      return (
+        <Catalog
+          auth={view.auth}
+          items={view.catalog}
+          onUpdate={() => {
+            setView({ kind: "loading", auth: view.auth, message: "Refreshing…" });
+            void hydrate(view.auth, setView);
+          }}
+        />
+      );
+    case "ready":
+      return <Ready auth={view.auth} catalog={view.catalog} />;
+    case "error":
+      return (
+        <Shell>
+          <h1>Hmm.</h1>
+          <p className="error">{view.message}</p>
+          <button
+            className="secondary"
+            onClick={() => {
+              clearAuth();
+              setView({ kind: "landing" });
+            }}
+          >
+            Start over
+          </button>
+        </Shell>
+      );
+  }
+}
+
+async function hydrate(auth: AuthState, setView: (v: View) => void) {
+  try {
+    const catalog = await getCatalog(auth.access_token, auth.workspace_id);
+    const hasConnected = catalog.some((c) => c.status === "connected");
+    if (hasConnected) {
+      setView({ kind: "ready", auth, catalog });
+    } else {
+      setView({ kind: "catalog", auth, catalog });
+    }
+  } catch (err) {
+    setView({
+      kind: "error",
+      message: err instanceof Error ? err.message : "Failed to load",
+    });
+  }
+}
+
+function Shell({ children }: { children: React.ReactNode }) {
+  return <div className="shell">{children}</div>;
+}
+
+function Landing({ onStart }: { onStart: () => void }) {
+  return (
+    <Shell>
+      <h1>Runner in your iMessage.</h1>
+      <p>Text your agent. Use the apps you already connected on desktop. 60 seconds.</p>
+      <div className="spacer" />
+      <button onClick={onStart}>Get started</button>
+    </Shell>
+  );
+}
+
+function EmailEntry({
+  onSent,
+  onError,
+}: {
+  onSent: (email: string) => void;
+  onError: (message: string) => void;
+}) {
+  const [email, setEmail] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  return (
+    <Shell>
+      <h1>What's your email?</h1>
+      <p>We'll send you a 6-digit code.</p>
+      <input
+        type="email"
+        autoFocus
+        autoComplete="email"
+        autoCapitalize="off"
+        spellCheck={false}
+        placeholder="you@company.com"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+      />
+      <button
+        disabled={!email || busy}
+        onClick={async () => {
+          setBusy(true);
+          try {
+            await magicAuthStart(email.trim());
+            onSent(email.trim());
+          } catch (err) {
+            onError(err instanceof Error ? err.message : "Failed to send code");
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {busy ? "Sending…" : "Send code"}
+      </button>
+    </Shell>
+  );
+}
+
+function CodeEntry({
+  email,
+  onVerified,
+  onError,
+}: {
+  email: string;
+  onVerified: (auth: AuthState) => void;
+  onError: (message: string) => void;
+}) {
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  return (
+    <Shell>
+      <h1>Check your email.</h1>
+      <p>We sent a 6-digit code to {email}.</p>
+      <input
+        type="text"
+        inputMode="numeric"
+        autoFocus
+        autoComplete="one-time-code"
+        maxLength={6}
+        placeholder="123456"
+        value={code}
+        onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+      />
+      <button
+        disabled={code.length !== 6 || busy}
+        onClick={async () => {
+          setBusy(true);
+          try {
+            const verify = await magicAuthVerify(email, code);
+            let workspaceId = verify.default_workspace_id;
+            if (!workspaceId) {
+              const workspaces = await listWorkspaces(verify.access_token);
+              const first = workspaces[0];
+              if (!first) throw new Error("No workspaces found for this account");
+              workspaceId = first.id;
+            }
+            // JWT expiry isn't returned directly; assume 30d (matches Runner backend
+            // — the refresh helper handles re-rotation).
+            const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60_000).toISOString();
+            onVerified({
+              access_token: verify.access_token,
+              refresh_token: verify.refresh_token,
+              jwt_expires_at: expiresAt,
+              runner_user_id: verify.email, // backend doesn't expose user_id; use email as stable handle
+              workspace_id: workspaceId,
+              email: verify.email,
+            });
+          } catch (err) {
+            onError(err instanceof Error ? err.message : "Bad code");
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {busy ? "Verifying…" : "Verify"}
+      </button>
+    </Shell>
+  );
+}
+
+function Loading({ message }: { message: string }) {
+  return (
+    <Shell>
+      <h1>{message}</h1>
+    </Shell>
+  );
+}
+
+function Catalog({
+  auth,
+  items,
+  onUpdate,
+}: {
+  auth: AuthState;
+  items: CatalogItem[];
+  onUpdate: () => void;
+}) {
+  const [busy, setBusy] = useState<string | null>(null);
+
+  // Hide local-only integrations and Unipile-direct (per V0 plan).
+  const visible = items.filter(
+    (c) => c.backendType !== "local" && c.backendType !== "direct",
+  );
+
+  const handleConnect = async (slug: string) => {
+    setBusy(slug);
+    try {
+      const res = await connect(auth.access_token, auth.workspace_id, slug);
+      if (res.status === "pending") {
+        window.location.href = res.redirectUrl;
+      } else {
+        onUpdate();
+      }
+    } catch (err) {
+      console.error(err);
+      setBusy(null);
+    }
+  };
+
+  const hasConnected = items.some((c) => c.status === "connected");
+
+  return (
+    <Shell>
+      <h1>Connect your apps.</h1>
+      <p>Pick at least one. The agent uses these to actually do things for you.</p>
+      <div className="catalog">
+        {visible.map((c) => {
+          const connected = c.status === "connected";
+          return (
+            <div
+              key={c.slug}
+              className={`catalog-item${connected ? " connected" : ""}`}
+              onClick={() => !busy && !connected && handleConnect(c.slug)}
+            >
+              {c.icon ? <img src={c.icon} alt="" /> : <div style={{ width: 32, height: 32 }} />}
+              <div className="name">{c.name}</div>
+              <div className="status">
+                {connected ? "Connected" : busy === c.slug ? "Opening…" : "Connect"}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {hasConnected && (
+        <button
+          onClick={() => onUpdate()}
+          style={{ marginTop: 16 }}
+        >
+          Continue
+        </button>
+      )}
+    </Shell>
+  );
+}
+
+function Ready({ auth, catalog }: { auth: AuthState; catalog: CatalogItem[] }) {
+  const [busy, setBusy] = useState(false);
+  const connected = catalog.filter((c) => c.status === "connected");
+  const names = connected
+    .slice(0, 4)
+    .map((c) => c.name)
+    .join(", ");
+  const more = connected.length > 4 ? `, and ${connected.length - 4} more` : "";
+
+  const handleHandoff = async () => {
+    setBusy(true);
+    try {
+      const { token } = await mintLinkToken({
+        access_token: auth.access_token,
+        refresh_token: auth.refresh_token,
+        jwt_expires_at: auth.jwt_expires_at,
+        runner_user_id: auth.runner_user_id,
+        workspace_id: auth.workspace_id,
+      });
+      const body = encodeURIComponent(`hi 👋 [link:${token}]`);
+      window.location.href = `imessage:${RUNNER_IMESSAGE_NUMBER}&body=${body}`;
+    } catch (err) {
+      console.error(err);
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Shell>
+      <h1>You're set.</h1>
+      <p>
+        We see {names}
+        {more} connected.
+      </p>
+      <div className="banner">
+        <p>
+          Tap below to text Runner. Once you do, the agent will reply right in your iMessage thread.
+        </p>
+      </div>
+      <div className="spacer" />
+      <button disabled={busy} onClick={handleHandoff}>
+        {busy ? "Opening…" : "Text Runner"}
+      </button>
+    </Shell>
+  );
+}

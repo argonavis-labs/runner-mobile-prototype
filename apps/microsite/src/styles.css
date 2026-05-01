@@ -1,0 +1,154 @@
+:root {
+  --bg: #0b0b0f;
+  --fg: #f4f4f5;
+  --muted: #a1a1aa;
+  --border: #27272a;
+  --accent: #ff5c1a;
+  --card: #15151a;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+body {
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
+}
+
+.shell {
+  max-width: 480px;
+  min-height: 100%;
+  margin: 0 auto;
+  padding: 32px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+h1 {
+  font-size: 28px;
+  margin: 0 0 8px;
+  letter-spacing: -0.01em;
+}
+
+p {
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 0;
+}
+
+input {
+  width: 100%;
+  padding: 14px 16px;
+  font-size: 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+  color: var(--fg);
+}
+
+input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+button {
+  width: 100%;
+  padding: 14px 16px;
+  font-size: 16px;
+  border: none;
+  border-radius: 12px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+button.secondary {
+  background: var(--card);
+  color: var(--fg);
+  border: 1px solid var(--border);
+}
+
+.error {
+  color: #fda4af;
+  font-size: 14px;
+}
+
+.catalog {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 12px;
+}
+
+.catalog-item {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.catalog-item:hover {
+  border-color: var(--accent);
+}
+
+.catalog-item.connected {
+  border-color: #4ade80;
+}
+
+.catalog-item img {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  background: #fff;
+  object-fit: contain;
+  padding: 4px;
+}
+
+.catalog-item .name {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.catalog-item .status {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.catalog-item.connected .status {
+  color: #4ade80;
+}
+
+.banner {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.spacer {
+  flex: 1;
+}

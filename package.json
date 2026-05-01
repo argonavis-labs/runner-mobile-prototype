@@ -1,0 +1,26 @@
+{
+  "name": "runner-mobile-prototype",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.26.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "typecheck": "pnpm -r typecheck",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "db:migrate": "pnpm --filter @runner-mobile/db migrate",
+    "dev:server": "pnpm --filter @runner-mobile/server dev",
+    "dev:microsite": "pnpm --filter @runner-mobile/microsite dev",
+    "cron": "pnpm --filter @runner-mobile/cron start"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "eslint": "^9.18.0",
+    "prettier": "^3.4.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}
