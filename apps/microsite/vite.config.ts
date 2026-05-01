@@ -8,5 +8,7 @@ export default defineConfig({
   },
   preview: {
     port: 5173,
+    // Allow Railway's auto-generated domains and any custom domain.
+    allowedHosts: true,
   },
 });
