@@ -20,6 +20,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import type {
   AgentCreateParams,
   AgentUpdateParams,
+  BetaManagedAgentsAgentToolset20260401Params,
   BetaManagedAgentsCustomToolParams,
   BetaManagedAgentsMCPToolsetParams,
   BetaManagedAgentsURLMCPServerParams,
@@ -123,10 +124,26 @@ const SEND_IMESSAGE_TOOL: BetaManagedAgentsCustomToolParams = {
  * current catalog. Backend is no-op if nothing changed; we still bump the
  * stored version on a real change.
  *
- * For every MCP server declared, a matching `mcp_toolset` tool entry is
- * required — the agent will reject the config otherwise (verified empirically:
- * "mcp_servers [...] declared but no mcp_toolset in tools references them").
+ * Tool array (in order):
+ *   1. send_imessage — custom tool, the only way the agent talks to the user.
+ *   2. agent_toolset_20260401 — built-in web search / fetch / bash / file ops.
+ *      Always present so users with zero MCP connections still get something
+ *      useful. always_allow so we never hit a confirmation gate.
+ *   3. mcp_toolset(name=<server>) — one per connected MCP server. always_allow
+ *      so MCP tool calls execute without going through tool-confirmation.
+ *
+ * Without explicit always_allow, MCP toolsets default to always_ask which
+ * triggers `requires_action` events that aren't `user.custom_tool_result`-
+ * shaped. Verified empirically: a Gmail call after the first text crashed
+ * the turn loop with "tool_use_id ... does not match any custom_tool_use".
  */
+const ALWAYS_ALLOW = { permission_policy: { type: "always_allow" } } as const;
+
+const AGENT_TOOLSET: BetaManagedAgentsAgentToolset20260401Params = {
+  type: "agent_toolset_20260401",
+  default_config: ALWAYS_ALLOW,
+};
+
 export async function ensureAgent(user: User, catalog: CatalogItem[]): Promise<string> {
   const c = client();
   const mcpServers: BetaManagedAgentsURLMCPServerParams[] = buildMcpServers(
@@ -136,12 +153,16 @@ export async function ensureAgent(user: User, catalog: CatalogItem[]): Promise<s
   const mcpToolsets: BetaManagedAgentsMCPToolsetParams[] = mcpServers.map((s) => ({
     type: "mcp_toolset",
     mcp_server_name: s.name,
+    default_config: ALWAYS_ALLOW,
   }));
-  const tools = [SEND_IMESSAGE_TOOL, ...mcpToolsets];
+  const tools = [SEND_IMESSAGE_TOOL, AGENT_TOOLSET, ...mcpToolsets];
 
   if (user.managedAgentId && user.managedAgentVersion != null) {
     const params: AgentUpdateParams = {
       version: user.managedAgentVersion,
+      // Pass model on update so existing agents pick up model changes
+      // (otherwise update preserves whatever model was set at create time).
+      model: MODEL,
       system: SYSTEM_PROMPT,
       tools,
       mcp_servers: mcpServers,
@@ -295,10 +316,23 @@ export async function runTurn(opts: {
     if (event.type === "session.status_idle") {
       const stopReason = (event as BetaManagedAgentsSessionStatusIdleEvent).stop_reason;
       if (stopReason.type === "requires_action") {
+        // event_ids can include both `agent.custom_tool_use` (which we
+        // respond to with `user.custom_tool_result`) AND other event types
+        // like MCP/built-in tool uses awaiting confirmation (which need
+        // `user.tool_confirmation`). We only handle the custom-tool case
+        // here. With always_allow set on every toolset (see ensureAgent)
+        // we shouldn't see confirmation requests in V0 — but if one does
+        // arrive, skip it rather than crashing the turn.
         for (const eventId of stopReason.event_ids) {
           const tu = toolUseById.get(eventId);
+          if (!tu) {
+            console.warn(
+              `requires_action event ${eventId} is not a custom_tool_use we tracked; skipping (likely tool_confirmation)`,
+            );
+            continue;
+          }
           let resultText = "ok";
-          if (tu?.name === "send_imessage") {
+          if (tu.name === "send_imessage") {
             const message = (tu.input as { message?: unknown }).message;
             if (typeof message === "string" && message.trim().length > 0) {
               try {
@@ -312,7 +346,7 @@ export async function runTurn(opts: {
               resultText = "error: missing or empty message";
             }
           } else {
-            resultText = `error: unknown tool ${tu?.name ?? "<unknown>"}`;
+            resultText = `error: unknown tool ${tu.name}`;
           }
 
           const result: EventSendParams = {
