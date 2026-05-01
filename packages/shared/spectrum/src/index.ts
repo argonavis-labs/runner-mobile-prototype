@@ -143,15 +143,19 @@ export async function createSharedUser(opts: {
   lastName?: string;
   email?: string;
 }): Promise<SharedUser> {
+  // Spectrum's docs page (api-reference/users/create-shared-user) advertises
+  // POST /projects/{id}/users/shared, but that returns 404. The real endpoint
+  // is POST /projects/{id}/users/ with `type: "shared"` in the body. Verified
+  // by trying both against a live project.
   const res = await fetch(
-    `${SPECTRUM_BASE_URL}/projects/${projectId()}/users/shared`,
+    `${SPECTRUM_BASE_URL}/projects/${projectId()}/users/`,
     {
       method: "POST",
       headers: {
         authorization: basicAuth(),
         "content-type": "application/json",
       },
-      body: JSON.stringify(opts),
+      body: JSON.stringify({ ...opts, type: "shared" }),
     },
   );
   const body = (await res.json()) as
