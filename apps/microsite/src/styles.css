@@ -1,12 +1,86 @@
+/* ── Fonts (subset of the runner.now/argoai-web stack) ─────────────────────── */
+
+@font-face {
+  font-family: "Exposure";
+  src: url("/fonts/Exposure.woff2") format("woff2"),
+    url("/fonts/Exposure.woff") format("woff");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Geist";
+  src: url("/fonts/Geist-400.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Geist";
+  src: url("/fonts/Geist-500.ttf") format("truetype");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Geist";
+  src: url("/fonts/Geist-600.ttf") format("truetype");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Geist Mono";
+  src: url("/fonts/GeistMono-400.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Geist Mono";
+  src: url("/fonts/GeistMono-500.ttf") format("truetype");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Instrument Serif";
+  src: url("/fonts/InstrumentSerif-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Rage Italic";
+  src: url("/fonts/RageItalic.ttf") format("truetype");
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+
+/* ── Runner color tokens (mirrors argoai-web's theme.css) ──────────────────── */
+
 :root {
-  --bg: #0b0b0f;
-  --fg: #f4f4f5;
-  --muted: #a1a1aa;
-  --border: #27272a;
-  --accent: #ff5c1a;
-  --card: #15151a;
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
-  -webkit-font-smoothing: antialiased;
+  --c-background: #fdfdfd;
+  --c-primary: #1d1b1b;
+  --c-secondary: #6e6e6e;
+  --c-line: #bbb7b3;
+  --c-warm-accent: #a0553a;
+
+  --marketing-heading: #1d1b1b;
+  --marketing-copy: #1d1b1b;
+  --marketing-copy-soft: #464242;
+  --marketing-eyebrow: #a1a1a1;
+  --marketing-card: rgba(255, 255, 255, 0.92);
+  --marketing-card-strong: rgba(255, 255, 255, 0.96);
+  --marketing-border: #c4c1bd;
+  --marketing-border-strong: rgba(29, 27, 27, 0.18);
+  --marketing-primary-bg: #1d1b1b;
+  --marketing-primary-bg-hover: #000000;
+  --marketing-primary-text: #e7e7e7;
+  --marketing-accent: #a86448;
+  --marketing-accent-warm: #cd704c;
+  --marketing-ambient-primary: rgba(168, 100, 72, 0.15);
 }
 
 * {
@@ -18,105 +92,244 @@ body,
 #root {
   height: 100%;
   margin: 0;
-  background: var(--bg);
-  color: var(--fg);
+  background: var(--c-background);
+  color: var(--c-primary);
 }
 
 body {
+  font-family: "Geist", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  font-size: 16px;
+  line-height: 1.4;
   padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
     env(safe-area-inset-left);
+  -webkit-font-smoothing: antialiased;
 }
 
-.shell {
-  max-width: 480px;
-  min-height: 100%;
-  margin: 0 auto;
-  padding: 32px 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
+/* ── Type system ───────────────────────────────────────────────────────────── */
+
+.type-display {
+  font-family: "Instrument Serif", serif;
+  font-weight: 400;
+  font-size: 42px;
+  line-height: 0.98;
+  letter-spacing: -0.9px;
+  color: var(--marketing-heading);
 }
 
-h1 {
-  font-size: 28px;
-  margin: 0 0 8px;
-  letter-spacing: -0.01em;
-}
-
-p {
-  color: var(--muted);
-  line-height: 1.5;
+.type-heading-1 {
+  font-family: "Exposure", serif;
+  font-weight: 400;
+  font-size: 36px;
+  line-height: 1;
+  letter-spacing: -1.5px;
+  color: var(--marketing-heading);
   margin: 0;
 }
 
-input {
-  width: 100%;
-  padding: 14px 16px;
+.type-heading-2 {
+  font-family: "Exposure", serif;
+  font-weight: 400;
+  font-size: 28px;
+  line-height: 1.1;
+  letter-spacing: -0.5px;
+  color: var(--marketing-heading);
+  margin: 0;
+}
+
+.type-title {
+  font-family: "Exposure", serif;
+  font-weight: 400;
+  font-size: 18px;
+  line-height: 1.2;
+  color: var(--marketing-heading);
+  margin: 0;
+}
+
+.type-body {
+  font-family: "Geist", sans-serif;
+  font-weight: 400;
   font-size: 16px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--card);
-  color: var(--fg);
+  line-height: 1.4;
+  color: var(--marketing-copy-soft);
+  margin: 0;
+}
+
+.type-caption {
+  font-family: "Geist Mono", monospace;
+  font-weight: 400;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--marketing-eyebrow);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.type-script {
+  font-family: "Rage Italic", cursive;
+  font-style: italic;
+  font-weight: 400;
+  font-size: 20px;
+  line-height: 1.2;
+  letter-spacing: -0.5px;
+  color: var(--c-warm-accent);
+}
+
+@media (min-width: 640px) {
+  .type-display {
+    font-size: 62px;
+    letter-spacing: -1.05px;
+  }
+  .type-heading-1 {
+    font-size: 48px;
+    letter-spacing: -2.09px;
+  }
+  .type-heading-2 {
+    font-size: 36px;
+  }
+}
+
+/* ── Layout ────────────────────────────────────────────────────────────────── */
+
+.shell {
+  position: relative;
+  max-width: 480px;
+  min-height: 100%;
+  margin: 0 auto;
+  padding: 56px 24px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.shell::before {
+  /* warm ambient blob behind hero — mirrors runner.now's terracotta glow */
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 360px;
+  height: 360px;
+  background: radial-gradient(
+    circle,
+    var(--marketing-ambient-primary) 0%,
+    transparent 70%
+  );
+  pointer-events: none;
+  z-index: -1;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.eyebrow {
+  font-family: "Geist Mono", monospace;
+  font-size: 12px;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--marketing-eyebrow);
+  margin: 0 0 12px 0;
+}
+
+/* ── Inputs ────────────────────────────────────────────────────────────────── */
+
+input[type="email"],
+input[type="text"],
+input[type="tel"] {
+  width: 100%;
+  padding: 14px 20px;
+  font-family: "Geist", sans-serif;
+  font-size: 16px;
+  font-weight: 400;
+  border: 1px solid var(--marketing-border);
+  border-radius: 9999px;
+  background: var(--marketing-card-strong);
+  color: var(--marketing-heading);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+input::placeholder {
+  color: var(--marketing-eyebrow);
 }
 
 input:focus {
   outline: none;
-  border-color: var(--accent);
+  border-color: var(--marketing-border-strong);
+  box-shadow: 0 0 0 4px rgba(29, 27, 27, 0.04);
 }
+
+/* ── Buttons ───────────────────────────────────────────────────────────────── */
 
 button {
   width: 100%;
-  padding: 14px 16px;
+  padding: 14px 28px;
+  font-family: "Geist", sans-serif;
   font-size: 16px;
+  font-weight: 500;
   border: none;
-  border-radius: 12px;
-  background: var(--accent);
-  color: #fff;
+  border-radius: 9999px;
+  background: var(--marketing-primary-bg);
+  color: var(--marketing-primary-text);
   cursor: pointer;
-  font-weight: 600;
+  transition: background-color 0.2s, transform 0.1s;
+}
+
+button:hover:not(:disabled) {
+  background: var(--marketing-primary-bg-hover);
+}
+
+button:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 button:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: not-allowed;
 }
 
 button.secondary {
-  background: var(--card);
-  color: var(--fg);
-  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--marketing-heading);
+  border: 1px solid var(--marketing-border);
 }
 
-.error {
-  color: #fda4af;
-  font-size: 14px;
+button.secondary:hover:not(:disabled) {
+  background: rgba(29, 27, 27, 0.04);
+  border-color: var(--marketing-border-strong);
 }
+
+/* ── Catalog grid ──────────────────────────────────────────────────────────── */
 
 .catalog {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 10px;
 }
 
 .catalog-item {
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 14px;
+  background: var(--marketing-card);
+  border: 1px solid var(--marketing-border);
+  border-radius: 16px;
+  padding: 16px;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 10px;
   cursor: pointer;
-  transition: border-color 0.15s;
+  transition: transform 0.2s ease-out, border-color 0.2s ease-out, box-shadow 0.2s ease-out;
+  position: relative;
 }
 
 .catalog-item:hover {
-  border-color: var(--accent);
+  transform: translateY(-1px);
+  border-color: var(--marketing-border-strong);
+  box-shadow: 0 20px 60px -40px rgba(0, 0, 0, 0.25);
 }
 
 .catalog-item.connected {
-  border-color: #4ade80;
+  border-color: rgba(74, 158, 88, 0.5);
 }
 
 .catalog-item img {
@@ -129,26 +342,81 @@ button.secondary {
 }
 
 .catalog-item .name {
-  font-size: 14px;
-  font-weight: 500;
+  font-family: "Exposure", serif;
+  font-size: 16px;
+  font-weight: 400;
+  color: var(--marketing-heading);
+  letter-spacing: -0.2px;
 }
 
 .catalog-item .status {
-  font-size: 12px;
-  color: var(--muted);
+  font-family: "Geist Mono", monospace;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--marketing-eyebrow);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
 .catalog-item.connected .status {
-  color: #4ade80;
+  color: #4a9e58;
 }
+
+/* ── Banner / soft panel ───────────────────────────────────────────────────── */
 
 .banner {
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 16px;
+  background: var(--marketing-card);
+  border: 1px solid var(--marketing-border);
+  border-radius: 16px;
+  padding: 18px 20px;
 }
 
-.spacer {
-  flex: 1;
+.banner p {
+  margin: 0;
+  font-family: "Geist", sans-serif;
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--marketing-copy-soft);
+}
+
+/* ── States ────────────────────────────────────────────────────────────────── */
+
+.error-text {
+  color: var(--c-warm-accent);
+  font-family: "Geist", sans-serif;
+  font-size: 14px;
+  margin: 0;
+}
+
+.helper-text {
+  font-family: "Geist", sans-serif;
+  font-size: 13px;
+  color: var(--marketing-eyebrow);
+  margin: 0;
+}
+
+/* ── Animations ────────────────────────────────────────────────────────────── */
+
+@keyframes reveal-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.reveal {
+  animation: reveal-up 420ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal {
+    animation: none;
+  }
+  button:active:not(:disabled) {
+    transform: none;
+  }
 }

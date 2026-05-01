@@ -85,8 +85,10 @@ export function App() {
     case "error":
       return (
         <Shell>
-          <h1>Hmm.</h1>
-          <p className="error">{view.message}</p>
+          <p className="eyebrow">Something's off</p>
+          <h1 className="type-heading-1">Hmm.</h1>
+          <p className="error-text">{view.message}</p>
+          <div className="spacer" />
           <button
             className="secondary"
             onClick={() => {
@@ -125,10 +127,16 @@ function Shell({ children }: { children: React.ReactNode }) {
 function Landing({ onStart }: { onStart: () => void }) {
   return (
     <Shell>
-      <h1>Runner in your iMessage.</h1>
-      <p>Text your agent. Use the apps you already connected on desktop. 60 seconds.</p>
+      <p className="eyebrow reveal">Runner mobile</p>
+      <h1 className="type-display reveal">Your agent in iMessage.</h1>
+      <p className="type-body reveal" style={{ animationDelay: "60ms" }}>
+        Text Runner. It uses the apps you already connected on desktop — and gets work done while
+        you're not at your laptop.
+      </p>
       <div className="spacer" />
-      <button onClick={onStart}>Get started</button>
+      <button onClick={onStart} className="reveal" style={{ animationDelay: "120ms" }}>
+        Get started
+      </button>
     </Shell>
   );
 }
@@ -145,8 +153,9 @@ function EmailEntry({
 
   return (
     <Shell>
-      <h1>What's your email?</h1>
-      <p>We'll send you a 6-digit code.</p>
+      <p className="eyebrow">Step 1 of 3</p>
+      <h1 className="type-heading-1">What's your email?</h1>
+      <p className="type-body">We'll send you a 6-digit code.</p>
       <input
         type="email"
         autoFocus
@@ -191,8 +200,11 @@ function CodeEntry({
 
   return (
     <Shell>
-      <h1>Check your email.</h1>
-      <p>We sent a 6-digit code to {email}.</p>
+      <p className="eyebrow">Step 1 of 3 · Verify</p>
+      <h1 className="type-heading-1">Check your email.</h1>
+      <p className="type-body">
+        Six-digit code sent to <strong style={{ color: "var(--marketing-heading)" }}>{email}</strong>.
+      </p>
       <input
         type="text"
         inputMode="numeric"
@@ -243,7 +255,8 @@ function CodeEntry({
 function Loading({ message }: { message: string }) {
   return (
     <Shell>
-      <h1>{message}</h1>
+      <p className="eyebrow">One sec</p>
+      <h1 className="type-heading-1">{message}</h1>
     </Shell>
   );
 }
@@ -283,8 +296,9 @@ function Catalog({
 
   return (
     <Shell>
-      <h1>Connect your apps.</h1>
-      <p>Pick at least one. The agent uses these to actually do things for you.</p>
+      <p className="eyebrow">Step 2 of 3</p>
+      <h1 className="type-heading-1">Connect your apps.</h1>
+      <p className="type-body">Pick at least one. The agent uses these to actually do things.</p>
       <div className="catalog">
         {visible.map((c) => {
           const connected = c.status === "connected";
@@ -304,10 +318,7 @@ function Catalog({
         })}
       </div>
       {hasConnected && (
-        <button
-          onClick={() => onUpdate()}
-          style={{ marginTop: 16 }}
-        >
+        <button onClick={() => onUpdate()} style={{ marginTop: 8 }}>
           Continue
         </button>
       )}
@@ -333,13 +344,14 @@ function Ready({
 
   return (
     <Shell>
-      <h1>You're set.</h1>
-      <p>
+      <p className="eyebrow">Welcome back</p>
+      <h1 className="type-heading-1">You're set.</h1>
+      <p className="type-body">
         We see {names}
-        {more} connected.
+        {more} connected. The agent has them ready to use.
       </p>
       <div className="banner">
-        <p>One more step: tell us your phone so we can route iMessages to your agent.</p>
+        <p>One more step — your phone number so we can route iMessages to your agent.</p>
       </div>
       <div className="spacer" />
       <button onClick={onContinue}>Continue</button>
@@ -403,8 +415,9 @@ function PhoneEntry({
 
   return (
     <Shell>
-      <h1>Your phone number?</h1>
-      <p>The one your iMessage uses.</p>
+      <p className="eyebrow">Step 3 of 3</p>
+      <h1 className="type-heading-1">Your phone number?</h1>
+      <p className="type-body">The one your iMessage uses.</p>
       <input
         type="tel"
         autoFocus
