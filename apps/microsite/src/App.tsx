@@ -286,12 +286,17 @@ function Catalog({
         onUpdate();
         return;
       }
-      // Open Composio's hosted OAuth page in a new tab/window so the
-      // microsite stays on screen and we can poll for completion.
-      const popup = window.open(res.redirectUrl, "_blank", "noopener,noreferrer");
+      // Open Composio's hosted OAuth page in a new tab so the microsite
+      // stays on screen and we can poll for completion.
+      //
+      // NOTE: do NOT pass `noopener,noreferrer` — Safari (and some other
+      // browsers) return `null` from window.open when those flags are set,
+      // even when the tab actually opens. That triggered our popup-blocked
+      // fallback and navigated the current tab too, leaving the user stuck.
+      const popup = window.open(res.redirectUrl, "_blank");
       if (!popup) {
-        // Popup blocked (rare in mobile Safari from click handlers, but possible).
-        // Fall back to navigating the current tab — user comes back manually.
+        // True popup-block (rare on mobile from a click handler). Fall back
+        // to navigating the current tab — user comes back manually.
         window.location.href = res.redirectUrl;
         return;
       }
