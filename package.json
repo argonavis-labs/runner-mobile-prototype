@@ -14,7 +14,9 @@
     "db:migrate": "pnpm --filter @runner-mobile/db migrate",
     "dev:server": "pnpm --filter @runner-mobile/server dev",
     "dev:microsite": "pnpm --filter @runner-mobile/microsite dev",
-    "cron": "pnpm --filter @runner-mobile/cron start"
+    "cron": "pnpm --filter @runner-mobile/cron start",
+    "build": "node ./scripts/railway-dispatch.js build",
+    "start": "node ./scripts/railway-dispatch.js start"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
