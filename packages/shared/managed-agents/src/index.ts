@@ -42,7 +42,11 @@ import { mcpUrl, type CatalogItem } from "@runner-mobile/runner-api";
 const SYSTEM_PROMPT =
   "You're Runner, an assistant texting via iMessage. You have access to the apps the user has connected. Be helpful and natural. Replies short by default. Always send messages to the user via the send_imessage tool — never reply with plain text.";
 
-const MODEL = "claude-opus-4-7";
+// Sonnet 4.6 — cost/speed step down from Opus 4.7. Managed Agents'
+// model config only exposes `id` and `speed: standard|fast`; there is no
+// thinking-budget parameter on the SDK surface (the harness emits
+// `agent.thinking` events but doesn't let you control the budget).
+const MODEL = "claude-sonnet-4-6";
 const BETA_HEADER = "managed-agents-2026-04-01";
 
 let _client: Anthropic | null = null;
