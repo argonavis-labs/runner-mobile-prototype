@@ -80,7 +80,7 @@ export async function runHeartbeatTicks(spectrumApp: SpectrumApp): Promise<{
     .select()
     .from(users)
     .where(
-      sql`${users.lastUserMsgAt} is not null and ${users.lastUserMsgAt} < now() - interval '4 hours'`,
+      sql`${users.lastUserMsgAt} is not null and ${users.lastUserMsgAt} < now() - interval '1 hour'`,
     );
 
   let texted = 0;
