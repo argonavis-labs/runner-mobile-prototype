@@ -106,3 +106,70 @@ function extractText(message: Message): string {
   if (block.type === "text") return block.text;
   return "";
 }
+
+// ---------- REST API (cloud) ----------
+//
+// Spectrum SDK doesn't expose project-management endpoints (create shared
+// user, redirect URL minting), so we hit the REST API directly. Auth is
+// HTTP Basic with `projectId:projectSecret`.
+// Docs: https://docs.photon.codes/api-reference/users/create-shared-user
+
+const SPECTRUM_BASE_URL = "https://spectrum.photon.codes";
+
+function basicAuth(): string {
+  const projectId = process.env.SPECTRUM_PROJECT_ID;
+  const projectSecret = process.env.SPECTRUM_PROJECT_SECRET;
+  if (!projectId || !projectSecret) {
+    throw new Error("SPECTRUM_PROJECT_ID and SPECTRUM_PROJECT_SECRET are required");
+  }
+  return `Basic ${Buffer.from(`${projectId}:${projectSecret}`).toString("base64")}`;
+}
+
+function projectId(): string {
+  const id = process.env.SPECTRUM_PROJECT_ID;
+  if (!id) throw new Error("SPECTRUM_PROJECT_ID is required");
+  return id;
+}
+
+export type SharedUser = {
+  id: string;
+  phoneNumber: string;
+  assignedPhoneNumber: string;
+};
+
+export async function createSharedUser(opts: {
+  phoneNumber: string;
+  firstName?: string;
+  lastName?: string;
+  email?: string;
+}): Promise<SharedUser> {
+  const res = await fetch(
+    `${SPECTRUM_BASE_URL}/projects/${projectId()}/users/shared`,
+    {
+      method: "POST",
+      headers: {
+        authorization: basicAuth(),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(opts),
+    },
+  );
+  const body = (await res.json()) as
+    | { succeed: true; data: SharedUser }
+    | { succeed: false; error?: string };
+  if (!res.ok || !body.succeed) {
+    throw new Error(`createSharedUser failed: ${res.status} ${JSON.stringify(body)}`);
+  }
+  return body.data;
+}
+
+/**
+ * Build the public redirect URL the browser can hit to deep-link into
+ * Messages with the project's assigned phone prefilled. Spectrum's redirect
+ * endpoint is unauthenticated (it just looks up by user UUID).
+ */
+export function redirectUrl(spectrumUserId: string, prefilledMessage: string): string {
+  const url = new URL(`${SPECTRUM_BASE_URL}/users/${spectrumUserId}/redirect`);
+  url.searchParams.set("msg", prefilledMessage);
+  return url.toString();
+}

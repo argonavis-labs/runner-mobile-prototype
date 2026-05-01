@@ -108,18 +108,22 @@ export async function connect(
   });
 }
 
-export async function mintLinkToken(args: {
+export async function initImessageLink(args: {
   access_token: string;
   refresh_token: string;
   jwt_expires_at: string;
   runner_user_id: string;
   workspace_id: string;
-}): Promise<{ token: string }> {
+  phone_number: string; // E.164
+}): Promise<{ redirectUrl: string }> {
   const res = await fetch(`${SERVER_URL}/api/link/init`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(args),
   });
-  if (!res.ok) throw new Error(`mintLinkToken failed: ${res.status}`);
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`link/init failed: ${res.status} ${body}`);
+  }
   return res.json();
 }

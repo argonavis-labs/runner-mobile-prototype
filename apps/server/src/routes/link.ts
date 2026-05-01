@@ -1,8 +1,11 @@
-import { randomBytes } from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
-import { db, linkTokens } from "@runner-mobile/db";
+import { db, users } from "@runner-mobile/db";
 import { listWorkspaces } from "@runner-mobile/runner-api";
+import { createSharedUser, redirectUrl } from "@runner-mobile/spectrum";
+
+// E.164: '+' followed by 8-15 digits.
+const e164 = z.string().regex(/^\+[1-9]\d{7,14}$/);
 
 const linkInitSchema = z.object({
   access_token: z.string().min(1),
@@ -10,6 +13,7 @@ const linkInitSchema = z.object({
   jwt_expires_at: z.string().datetime(),
   runner_user_id: z.string().min(1),
   workspace_id: z.string().min(1),
+  phone_number: e164,
 });
 
 export const linkRouter: Router = Router();
@@ -22,8 +26,9 @@ linkRouter.post("/init", async (req, res) => {
   }
   const body = parsed.data;
 
-  // Validate JWT against Runner backend by listing workspaces and checking
-  // the user actually owns workspace_id.
+  // Validate JWT against Runner backend by listing workspaces and confirming
+  // the user actually owns workspace_id. Cheap, prevents random callers
+  // registering arbitrary phone↔jwt pairs.
   try {
     const workspaces = await listWorkspaces(body.access_token);
     const owns = workspaces.some((w) => w.id === body.workspace_id);
@@ -37,18 +42,40 @@ linkRouter.post("/init", async (req, res) => {
     return;
   }
 
-  const token = randomBytes(32).toString("base64url");
-  const expiresAt = new Date(Date.now() + 30 * 60_000); // 30 min
+  // Create or upsert the Spectrum shared user, then persist locally.
+  let sharedUser;
+  try {
+    sharedUser = await createSharedUser({ phoneNumber: body.phone_number });
+  } catch (err) {
+    console.error("Spectrum createSharedUser failed:", err);
+    res.status(502).json({ error: "spectrum_failed" });
+    return;
+  }
 
-  await db.insert(linkTokens).values({
-    token,
-    runnerUserId: body.runner_user_id,
-    workspaceId: body.workspace_id,
-    jwt: body.access_token,
-    refreshToken: body.refresh_token,
-    jwtExpiresAt: new Date(body.jwt_expires_at),
-    expiresAt,
-  });
+  await db
+    .insert(users)
+    .values({
+      phoneNumber: body.phone_number,
+      runnerUserId: body.runner_user_id,
+      workspaceId: body.workspace_id,
+      jwt: body.access_token,
+      refreshToken: body.refresh_token,
+      jwtExpiresAt: new Date(body.jwt_expires_at),
+      spectrumUserId: sharedUser.id,
+      assignedPhoneNumber: sharedUser.assignedPhoneNumber,
+    })
+    .onConflictDoUpdate({
+      target: users.phoneNumber,
+      set: {
+        runnerUserId: body.runner_user_id,
+        workspaceId: body.workspace_id,
+        jwt: body.access_token,
+        refreshToken: body.refresh_token,
+        jwtExpiresAt: new Date(body.jwt_expires_at),
+        spectrumUserId: sharedUser.id,
+        assignedPhoneNumber: sharedUser.assignedPhoneNumber,
+      },
+    });
 
-  res.json({ token });
+  res.json({ redirectUrl: redirectUrl(sharedUser.id, "hi 👋") });
 });

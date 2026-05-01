@@ -1,19 +1,20 @@
 /**
  * The core "handle one inbound message" path. Used by the Spectrum consumer
  * loop and (via cron tick) by the heartbeat job.
+ *
+ * Phone number is the lookup key. Users are pre-registered via the microsite
+ * `/api/link/init` route — if a webhook arrives from a phone we don't know,
+ * we reply with a pointer back to the microsite.
  */
 
-import { eq, sql } from "drizzle-orm";
-import { db, users, linkTokens, type User } from "@runner-mobile/db";
+import { eq, sql, isNotNull } from "drizzle-orm";
+import { db, users, type User } from "@runner-mobile/db";
 import { getCatalog, refreshIfExpired } from "@runner-mobile/runner-api";
 import { resumeOrSpawnAndRun } from "@runner-mobile/managed-agents";
 import { sendOutbound, type SpectrumApp } from "@runner-mobile/spectrum";
 
-const LINK_TOKEN_RE = /\[link:([A-Za-z0-9_-]+)\]/;
-const FALLBACK_REPLY =
-  "Hi 👋 I don't recognize this number yet. Head to " +
-  (process.env.MICROSITE_PUBLIC_URL ?? "the Runner microsite") +
-  " to get set up.";
+const FALLBACK_REPLY = (microsite: string) =>
+  `Hi 👋 I don't recognize this number yet. Head to ${microsite} to get set up.`;
 const ERROR_REPLY = "Hmm, something broke on my end. Try again in a minute.";
 
 export async function handleInboundMessage(opts: {
@@ -25,37 +26,20 @@ export async function handleInboundMessage(opts: {
   const sendImessage = (msg: string) => sendOutbound(spectrumApp, phoneNumber, msg);
 
   try {
-    let user = await findUserByPhone(phoneNumber);
-    let messageText = text;
-
+    const user = await findUserByPhone(phoneNumber);
     if (!user) {
-      const match = LINK_TOKEN_RE.exec(text);
-      if (!match) {
-        await sendImessage(FALLBACK_REPLY);
-        return;
-      }
-      const tokenStr = match[1];
-      if (!tokenStr) {
-        await sendImessage(FALLBACK_REPLY);
-        return;
-      }
-      const consumed = await consumeLinkToken(tokenStr, phoneNumber);
-      if (!consumed) {
-        await sendImessage(FALLBACK_REPLY);
-        return;
-      }
-      user = consumed;
-      messageText = text.replace(LINK_TOKEN_RE, "").trim();
-      if (!messageText) messageText = "hi";
+      const microsite = process.env.MICROSITE_PUBLIC_URL ?? "the Runner microsite";
+      await sendImessage(FALLBACK_REPLY(microsite));
+      return;
     }
 
-    user = await refreshIfExpired(user);
-    const catalog = await getCatalog(user.jwt, user.workspaceId);
+    const refreshed = await refreshIfExpired(user);
+    const catalog = await getCatalog(refreshed.jwt, refreshed.workspaceId);
 
     const sent = await resumeOrSpawnAndRun({
-      user,
+      user: refreshed,
       catalog,
-      userMessage: messageText,
+      userMessage: text,
       onSendIMessage: sendImessage,
     });
 
@@ -65,7 +49,7 @@ export async function handleInboundMessage(opts: {
         lastUserMsgAt: sql`now()`,
         ...(sent ? { lastAssistantMsgAt: sql`now()` } : {}),
       })
-      .where(eq(users.phoneNumber, user.phoneNumber));
+      .where(eq(users.phoneNumber, refreshed.phoneNumber));
   } catch (err) {
     console.error("handleInboundMessage failed:", err);
     try {
@@ -81,45 +65,12 @@ async function findUserByPhone(phoneNumber: string): Promise<User | null> {
   return rows[0] ?? null;
 }
 
-async function consumeLinkToken(token: string, phoneNumber: string): Promise<User | null> {
-  const tokenRows = await db
-    .select()
-    .from(linkTokens)
-    .where(eq(linkTokens.token, token))
-    .limit(1);
-
-  const t = tokenRows[0];
-  if (!t) return null;
-  if (t.consumedAt) return null;
-  if (t.expiresAt.getTime() < Date.now()) return null;
-
-  // Insert user row if it doesn't already exist (race-tolerant). If a user with
-  // this phone number arrives via a second link token, the second one no-ops.
-  const inserted = await db
-    .insert(users)
-    .values({
-      phoneNumber,
-      runnerUserId: t.runnerUserId,
-      workspaceId: t.workspaceId,
-      jwt: t.jwt,
-      refreshToken: t.refreshToken,
-      jwtExpiresAt: t.jwtExpiresAt,
-    })
-    .onConflictDoNothing({ target: users.phoneNumber })
-    .returning();
-
-  await db
-    .update(linkTokens)
-    .set({ consumedAt: sql`now()` })
-    .where(eq(linkTokens.token, token));
-
-  if (inserted[0]) return inserted[0];
-  // race: someone else inserted first — re-read
-  return findUserByPhone(phoneNumber);
-}
-
 /**
- * Run a heartbeat tick for every idle user. Used by the cron tick endpoint.
+ * Run a heartbeat tick for every idle user who has actually texted us at
+ * least once (last_user_msg_at is not null and older than 4h).
+ *
+ * Newly-registered users who never sent a message do NOT receive proactive
+ * texts — opt-in via first inbound is the only path to heartbeats.
  */
 export async function runHeartbeatTicks(spectrumApp: SpectrumApp): Promise<{
   considered: number;
@@ -129,7 +80,7 @@ export async function runHeartbeatTicks(spectrumApp: SpectrumApp): Promise<{
     .select()
     .from(users)
     .where(
-      sql`${users.lastUserMsgAt} < now() - interval '4 hours' or ${users.lastUserMsgAt} is null`,
+      sql`${users.lastUserMsgAt} is not null and ${users.lastUserMsgAt} < now() - interval '4 hours'`,
     );
 
   let texted = 0;
@@ -157,3 +108,6 @@ export async function runHeartbeatTicks(spectrumApp: SpectrumApp): Promise<{
 
   return { considered: idle.length, texted };
 }
+
+// Re-export so we can keep the unused-import lint happy if drizzle treeshaking trips.
+export { isNotNull };

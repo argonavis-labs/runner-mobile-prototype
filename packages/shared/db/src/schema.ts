@@ -7,6 +7,8 @@ export const users = pgTable("users", {
   jwt: text("jwt").notNull(),
   refreshToken: text("refresh_token").notNull(),
   jwtExpiresAt: timestamp("jwt_expires_at", { withTimezone: true }).notNull(),
+  spectrumUserId: text("spectrum_user_id").notNull(),
+  assignedPhoneNumber: text("assigned_phone_number"),
   managedAgentId: text("managed_agent_id"),
   managedAgentVersion: integer("managed_agent_version"),
   managedAgentVaultId: text("managed_agent_vault_id"),
@@ -16,19 +18,5 @@ export const users = pgTable("users", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const linkTokens = pgTable("link_tokens", {
-  token: text("token").primaryKey(),
-  runnerUserId: text("runner_user_id").notNull(),
-  workspaceId: text("workspace_id").notNull(),
-  jwt: text("jwt").notNull(),
-  refreshToken: text("refresh_token").notNull(),
-  jwtExpiresAt: timestamp("jwt_expires_at", { withTimezone: true }).notNull(),
-  consumedAt: timestamp("consumed_at", { withTimezone: true }),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
-});
-
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
-export type LinkToken = typeof linkTokens.$inferSelect;
-export type NewLinkToken = typeof linkTokens.$inferInsert;

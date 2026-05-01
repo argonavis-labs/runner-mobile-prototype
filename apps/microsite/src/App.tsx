@@ -2,10 +2,10 @@ import { useEffect, useState } from "react";
 import {
   connect,
   getCatalog,
+  initImessageLink,
   listWorkspaces,
   magicAuthStart,
   magicAuthVerify,
-  mintLinkToken,
   type CatalogItem,
 } from "./api.ts";
 import { clearAuth, loadAuth, saveAuth, type AuthState } from "./state.ts";
@@ -17,9 +17,8 @@ type View =
   | { kind: "loading"; auth: AuthState; message: string }
   | { kind: "catalog"; auth: AuthState; catalog: CatalogItem[] }
   | { kind: "ready"; auth: AuthState; catalog: CatalogItem[] }
+  | { kind: "phone"; auth: AuthState; catalog: CatalogItem[] }
   | { kind: "error"; message: string };
-
-const RUNNER_IMESSAGE_NUMBER = import.meta.env.VITE_RUNNER_IMESSAGE_NUMBER ?? "+15555555555";
 
 export function App() {
   const [view, setView] = useState<View>({ kind: "landing" });
@@ -69,7 +68,20 @@ export function App() {
         />
       );
     case "ready":
-      return <Ready auth={view.auth} catalog={view.catalog} />;
+      return (
+        <Ready
+          auth={view.auth}
+          catalog={view.catalog}
+          onContinue={() => setView({ kind: "phone", auth: view.auth, catalog: view.catalog })}
+        />
+      );
+    case "phone":
+      return (
+        <PhoneEntry
+          auth={view.auth}
+          onError={(message) => setView({ kind: "error", message })}
+        />
+      );
     case "error":
       return (
         <Shell>
@@ -303,32 +315,21 @@ function Catalog({
   );
 }
 
-function Ready({ auth, catalog }: { auth: AuthState; catalog: CatalogItem[] }) {
-  const [busy, setBusy] = useState(false);
+function Ready({
+  auth: _auth,
+  catalog,
+  onContinue,
+}: {
+  auth: AuthState;
+  catalog: CatalogItem[];
+  onContinue: () => void;
+}) {
   const connected = catalog.filter((c) => c.status === "connected");
   const names = connected
     .slice(0, 4)
     .map((c) => c.name)
     .join(", ");
   const more = connected.length > 4 ? `, and ${connected.length - 4} more` : "";
-
-  const handleHandoff = async () => {
-    setBusy(true);
-    try {
-      const { token } = await mintLinkToken({
-        access_token: auth.access_token,
-        refresh_token: auth.refresh_token,
-        jwt_expires_at: auth.jwt_expires_at,
-        runner_user_id: auth.runner_user_id,
-        workspace_id: auth.workspace_id,
-      });
-      const body = encodeURIComponent(`hi 👋 [link:${token}]`);
-      window.location.href = `imessage:${RUNNER_IMESSAGE_NUMBER}&body=${body}`;
-    } catch (err) {
-      console.error(err);
-      setBusy(false);
-    }
-  };
 
   return (
     <Shell>
@@ -338,13 +339,61 @@ function Ready({ auth, catalog }: { auth: AuthState; catalog: CatalogItem[] }) {
         {more} connected.
       </p>
       <div className="banner">
-        <p>
-          Tap below to text Runner. Once you do, the agent will reply right in your iMessage thread.
-        </p>
+        <p>One more step: tell us your phone so we can route iMessages to your agent.</p>
       </div>
       <div className="spacer" />
-      <button disabled={busy} onClick={handleHandoff}>
-        {busy ? "Opening…" : "Text Runner"}
+      <button onClick={onContinue}>Continue</button>
+    </Shell>
+  );
+}
+
+function PhoneEntry({
+  auth,
+  onError,
+}: {
+  auth: AuthState;
+  onError: (message: string) => void;
+}) {
+  const [phone, setPhone] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  // Light validation: E.164. We're not doing perfect localization in V0.
+  const e164 = /^\+[1-9]\d{7,14}$/;
+  const valid = e164.test(phone.trim());
+
+  const handleSubmit = async () => {
+    setBusy(true);
+    try {
+      const { redirectUrl } = await initImessageLink({
+        access_token: auth.access_token,
+        refresh_token: auth.refresh_token,
+        jwt_expires_at: auth.jwt_expires_at,
+        runner_user_id: auth.runner_user_id,
+        workspace_id: auth.workspace_id,
+        phone_number: phone.trim(),
+      });
+      window.location.href = redirectUrl;
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "Failed to start iMessage");
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Shell>
+      <h1>Your phone number?</h1>
+      <p>Format with country code, e.g. +14155551234. We'll open Messages with the right number prefilled.</p>
+      <input
+        type="tel"
+        autoFocus
+        autoComplete="tel"
+        placeholder="+14155551234"
+        value={phone}
+        onChange={(e) => setPhone(e.target.value)}
+      />
+      <div className="spacer" />
+      <button disabled={!valid || busy} onClick={handleSubmit}>
+        {busy ? "Opening Messages…" : "Tap to text Runner"}
       </button>
     </Shell>
   );
