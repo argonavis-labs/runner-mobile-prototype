@@ -82,7 +82,7 @@ export async function consumeInboundMessages(
   for await (const [space, message] of app.messages) {
     try {
       const phoneNumber = message.sender.id;
-      const text = extractText(message);
+      const text = await extractMessageText(message);
 
       const reply = async (t: string) => {
         const out = await message.reply(t);
@@ -106,11 +106,140 @@ export async function consumeInboundMessages(
   }
 }
 
-function extractText(message: Message): string {
-  // spectrum-ts Content is a discriminated union; we want the text variant.
-  const block = message.content;
-  if (block.type === "text") return block.text;
-  return "";
+type MessageContent = Message["content"];
+type EffectContent = Extract<MessageContent, { type: "effect" }>["content"];
+type ExtractableContent = MessageContent | EffectContent;
+type AudioContent = Extract<MessageContent, { type: "attachment" | "voice" }>;
+
+export type AudioTranscriptionInput = {
+  buffer: Buffer;
+  mimeType: string;
+  name: string;
+};
+
+export type AudioTranscriber = (input: AudioTranscriptionInput) => Promise<string>;
+
+export type ExtractMessageTextOptions = {
+  transcribeAudio?: AudioTranscriber;
+};
+
+export async function extractMessageText(
+  message: Pick<Message, "content">,
+  opts: ExtractMessageTextOptions = {},
+): Promise<string> {
+  return extractContentText(message.content, opts);
+}
+
+async function extractContentText(
+  content: ExtractableContent,
+  opts: ExtractMessageTextOptions,
+): Promise<string> {
+  switch (content.type) {
+    case "text":
+      return content.text;
+    case "voice":
+      return transcribeAudioContent(content, opts);
+    case "attachment":
+      if (isAudioMimeType(content.mimeType)) {
+        return transcribeAudioContent(content, opts);
+      }
+      return `Attachment received: ${content.name} (${content.mimeType})`;
+    case "effect":
+      return extractContentText(content.content, opts);
+    case "group": {
+      const parts = await Promise.all(
+        content.items.map((item) => extractMessageText(item, opts)),
+      );
+      return parts.filter(Boolean).join("\n\n");
+    }
+    case "contact":
+      return "Contact card received.";
+    case "poll":
+      return `Poll received: ${content.title}`;
+    case "poll_option":
+      return `Poll option ${content.selected ? "selected" : "deselected"}: ${content.title}`;
+    case "reaction":
+      return `Reaction received: ${content.emoji}`;
+    case "richlink":
+      return `Link received: ${content.url.toString()}`;
+    case "custom":
+      return "Unsupported message content received.";
+  }
+}
+
+async function transcribeAudioContent(
+  content: AudioContent,
+  opts: ExtractMessageTextOptions,
+): Promise<string> {
+  const name = content.type === "voice" ? (content.name ?? "voice.m4a") : content.name;
+
+  try {
+    const transcriber = opts.transcribeAudio ?? transcribeWithOpenAI;
+    const transcript = (await transcriber({
+      buffer: await content.read(),
+      mimeType: content.mimeType,
+      name,
+    })).trim();
+    if (!transcript) return "Voice note received, but no speech was detected.";
+    return `Voice note transcript: ${transcript}`;
+  } catch (err) {
+    console.error("audio transcription failed:", err);
+    return "Voice note received, but transcription failed on our side.";
+  }
+}
+
+export function isAudioMimeType(mimeType: string): boolean {
+  return mimeType.toLowerCase().startsWith("audio/");
+}
+
+async function transcribeWithOpenAI(input: AudioTranscriptionInput): Promise<string> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("OPENAI_API_KEY is required for voice note transcription");
+
+  const model = process.env.OPENAI_AUDIO_TRANSCRIPTION_MODEL ?? "gpt-4o-mini-transcribe";
+  const fallbackModels = process.env.OPENAI_AUDIO_TRANSCRIPTION_MODEL ? [] : ["whisper-1"];
+  const models = [model, ...fallbackModels];
+  let lastErr: unknown;
+
+  for (const candidate of models) {
+    try {
+      return await transcribeWithOpenAIModel(input, apiKey, candidate);
+    } catch (err) {
+      lastErr = err;
+      console.warn(`OpenAI transcription failed with ${candidate}:`, err);
+    }
+  }
+
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
+
+async function transcribeWithOpenAIModel(
+  input: AudioTranscriptionInput,
+  apiKey: string,
+  model: string,
+): Promise<string> {
+  const form = new FormData();
+  const audioBytes = new Uint8Array(input.buffer.length);
+  audioBytes.set(input.buffer);
+  form.set("model", model);
+  form.set("file", new File([audioBytes], input.name, { type: input.mimeType }));
+
+  const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${apiKey}`,
+    },
+    body: form,
+  });
+
+  const body = (await res.json()) as { text?: unknown; error?: unknown };
+  if (!res.ok) {
+    throw new Error(`OpenAI transcription failed: ${res.status} ${JSON.stringify(body)}`);
+  }
+  if (typeof body.text !== "string") {
+    throw new Error(`OpenAI transcription returned no text: ${JSON.stringify(body)}`);
+  }
+  return body.text;
 }
 
 // ---------- REST API (cloud) ----------
