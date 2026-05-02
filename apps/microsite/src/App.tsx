@@ -66,6 +66,7 @@ export function App() {
             setView({ kind: "loading", auth: view.auth, message: "Refreshing…" });
             void hydrate(view.auth, setView);
           }}
+          onContinue={() => setView({ kind: "phone", auth: view.auth, catalog: view.catalog })}
         />
       );
     case "ready":
@@ -266,10 +267,12 @@ function Catalog({
   auth,
   items,
   onUpdate,
+  onContinue,
 }: {
   auth: AuthState;
   items: CatalogItem[];
   onUpdate: () => void;
+  onContinue: () => void;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -365,7 +368,7 @@ function Catalog({
           );
         })}
       </div>
-      <button onClick={() => onUpdate()} style={{ marginTop: 8 }}>
+      <button onClick={onContinue} style={{ marginTop: 8 }}>
         {hasConnected ? "Continue" : "Skip for now"}
       </button>
     </Shell>

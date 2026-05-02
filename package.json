@@ -11,14 +11,15 @@
     "typecheck": "pnpm -r typecheck",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "db:migrate": "pnpm --filter @runner-mobile/db migrate",
-    "dev:server": "pnpm --filter @runner-mobile/server dev",
+    "db:migrate": "sh -c 'set -a; [ ! -f .env ] || . ./.env; set +a; pnpm --filter @runner-mobile/db migrate'",
+    "dev:server": "sh -c 'set -a; [ ! -f .env ] || . ./.env; set +a; pnpm --filter @runner-mobile/server dev'",
     "dev:microsite": "pnpm --filter @runner-mobile/microsite dev",
-    "cron": "pnpm --filter @runner-mobile/cron start",
+    "cron": "sh -c 'set -a; [ ! -f .env ] || . ./.env; set +a; pnpm --filter @runner-mobile/cron start'",
     "build": "node ./scripts/railway-dispatch.js build",
     "start": "node ./scripts/railway-dispatch.js start"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.4",
     "@types/node": "^22.10.0",
     "eslint": "^9.18.0",
     "prettier": "^3.4.2",
