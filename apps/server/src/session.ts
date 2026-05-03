@@ -21,6 +21,14 @@ import {
 const FALLBACK_REPLY = (microsite: string) =>
   `Hi 👋 I don't recognize this number yet. Head to ${microsite} to get set up.`;
 const ERROR_REPLY = "Hmm, something broke on my end. Try again in a minute.";
+const HEARTBEAT_DEFAULT_TIME_ZONE = process.env.HEARTBEAT_DEFAULT_TIME_ZONE ?? "America/Los_Angeles";
+const HEARTBEAT_SLOTS = [
+  { name: "start_of_day", startHour: 7, endHour: 8 },
+  { name: "midday", startHour: 12, endHour: 13 },
+  { name: "end_of_day", startHour: 17, endHour: 18 },
+] as const;
+
+type HeartbeatSlot = (typeof HEARTBEAT_SLOTS)[number];
 
 export async function handleInboundMessage(opts: {
   spectrumApp: SpectrumApp;
@@ -85,8 +93,9 @@ async function findUserByPhone(phoneNumber: string): Promise<User | null> {
 }
 
 /**
- * Run a heartbeat tick for every idle user who has actually texted us at
- * least once (last_user_msg_at is not null and older than 4h).
+ * Run scheduled heartbeat ticks for idle users who have actually texted us at
+ * least once. The Railway cron wakes every 15 min, but each user is only
+ * considered once per local-time heartbeat window.
  *
  * Newly-registered users who never sent a message do NOT receive proactive
  * texts — opt-in via first inbound is the only path to heartbeats.
@@ -102,9 +111,23 @@ export async function runHeartbeatTicks(spectrumApp: SpectrumApp): Promise<{
       sql`${users.lastUserMsgAt} is not null and ${users.lastUserMsgAt} < now() - interval '1 hour'`,
     );
 
+  let considered = 0;
   let texted = 0;
+  const now = new Date();
   for (const u of idle) {
+    const slotKey = heartbeatSlotKey(now, u.timeZone);
+    if (!slotKey || u.lastHeartbeatSlot === slotKey) continue;
+
     try {
+      considered += 1;
+      await db
+        .update(users)
+        .set({
+          lastHeartbeatTickAt: sql`now()`,
+          lastHeartbeatSlot: slotKey,
+        })
+        .where(eq(users.phoneNumber, u.phoneNumber));
+
       const refreshed = await refreshIfExpired(u);
       const catalog = await getCatalog(refreshed.jwt, refreshed.workspaceId);
       const sent = await resumeOrSpawnAndRun({
@@ -125,8 +148,55 @@ export async function runHeartbeatTicks(spectrumApp: SpectrumApp): Promise<{
     }
   }
 
-  return { considered: idle.length, texted };
+  return { considered, texted };
 }
 
 // Re-export so we can keep the unused-import lint happy if drizzle treeshaking trips.
 export { isNotNull };
+
+function heartbeatSlotKey(now: Date, userTimeZone: string | null): string | null {
+  const timeZone = validTimeZone(userTimeZone) ?? validTimeZone(HEARTBEAT_DEFAULT_TIME_ZONE);
+  if (!timeZone) return null;
+
+  const local = localDateHour(now, timeZone);
+  if (!local) return null;
+
+  const slot = HEARTBEAT_SLOTS.find((candidate) => inSlot(local.hour, candidate));
+  if (!slot) return null;
+
+  return `${local.date}:${slot.name}`;
+}
+
+function inSlot(hour: number, slot: HeartbeatSlot): boolean {
+  return hour >= slot.startHour && hour < slot.endHour;
+}
+
+function validTimeZone(timeZone: string | null | undefined): string | null {
+  if (!timeZone) return null;
+  try {
+    Intl.DateTimeFormat("en-US", { timeZone }).format(new Date());
+    return timeZone;
+  } catch {
+    return null;
+  }
+}
+
+function localDateHour(now: Date, timeZone: string): { date: string; hour: number } | null {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(now);
+
+  const values = new Map(parts.map((part) => [part.type, part.value]));
+  const year = values.get("year");
+  const month = values.get("month");
+  const day = values.get("day");
+  const hour = values.get("hour");
+  if (!year || !month || !day || !hour) return null;
+
+  return { date: `${year}-${month}-${day}`, hour: Number(hour) };
+}

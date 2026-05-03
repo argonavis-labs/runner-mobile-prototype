@@ -104,11 +104,11 @@ Single page, two paths driven by whether the email already has a Runner account.
 
 ### Heartbeat (proactivity)
 
-- Cron every **15 minutes**
-- For each user with no inbound message in 4h+, poke their session with a `[heartbeat tick]` event
-- Agent decides whether to text — most ticks are no-ops
-- **No cap** on proactive messages per day (we'll learn from the logs)
-- **Quiet hours: 9a–8p ET** (hard-coded)
+- Cron wakes every **15 minutes**
+- Per user, only run during local-time windows: **7a start-of-day**, **12p midday**, **5p end-of-day**
+- Each window is attempted at most once per user per local day
+- Newly linked users are timezone-aware via browser `Intl`; existing/null rows use `HEARTBEAT_DEFAULT_TIME_ZONE` or `America/Los_Angeles`
+- Agent decides whether to text, but should stay silent on routine FYI or weak signals
 
 ### System prompt
 
@@ -294,7 +294,7 @@ iMessage (Spectrum) ──→ Spectrum webhook
                        Agent reply via Spectrum
 ```
 
-Heartbeat cron (Railway) walks idle users every 15 min and pokes their session with a tick event. Agent decides whether to text.
+Heartbeat cron (Railway) wakes every 15 min, but users are only considered once in each local-time heartbeat window: 7a, 12p, and 5p. Agent decides whether to text.
 
 ### Prototype's own data model
 
@@ -308,8 +308,11 @@ users (
   jwt            text not null,
   refresh_token  text not null,
   jwt_expires_at timestamptz,
+  time_zone      text,
   last_user_msg_at timestamptz,
-  last_assistant_msg_at timestamptz
+  last_assistant_msg_at timestamptz,
+  last_heartbeat_tick_at timestamptz,
+  last_heartbeat_slot text
 )
 ```
 
@@ -339,7 +342,7 @@ The cloud memory replica adds prototype-owned memory tables later. Runner's exis
 | iMessage thread per user (Spectrum); SMS fallback Android | ✅ V0                         |
 | Persistent Managed Agents session per phone number        | ✅ V0                         |
 | Agent inherits all Composio + MCP-OAuth integrations      | ✅ V0                         |
-| Heartbeat cron 15-min, no cap, 9a–8p ET                   | ✅ V0                         |
+| Heartbeat cron with 3 local-time windows/day              | ✅ V0                         |
 | Minimum system prompt                                     | ✅ V0                         |
 | Unipile integrations (LinkedIn, IG)                       | ❌ V0 — desktop-only          |
 | Local macOS sources                                       | ❌ Mobile-impossible          |

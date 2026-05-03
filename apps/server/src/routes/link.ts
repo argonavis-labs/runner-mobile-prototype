@@ -16,7 +16,18 @@ const linkInitSchema = z.object({
   runner_user_id: z.string().min(1),
   workspace_id: z.string().min(1),
   phone_number: e164,
+  time_zone: z.string().min(1).optional(),
 });
+
+function normalizeTimeZone(timeZone: string | undefined): string | null {
+  if (!timeZone) return null;
+  try {
+    Intl.DateTimeFormat("en-US", { timeZone }).format(new Date());
+    return timeZone;
+  } catch {
+    return null;
+  }
+}
 
 export const linkRouter: Router = Router();
 
@@ -54,6 +65,8 @@ linkRouter.post("/init", async (req, res) => {
     return;
   }
 
+  const timeZone = normalizeTimeZone(body.time_zone);
+
   await db
     .insert(users)
     .values({
@@ -65,6 +78,7 @@ linkRouter.post("/init", async (req, res) => {
       jwtExpiresAt: new Date(body.jwt_expires_at),
       spectrumUserId: sharedUser.id,
       assignedPhoneNumber: sharedUser.assignedPhoneNumber,
+      timeZone,
     })
     .onConflictDoUpdate({
       target: users.phoneNumber,
@@ -76,6 +90,7 @@ linkRouter.post("/init", async (req, res) => {
         jwtExpiresAt: new Date(body.jwt_expires_at),
         spectrumUserId: sharedUser.id,
         assignedPhoneNumber: sharedUser.assignedPhoneNumber,
+        ...(timeZone ? { timeZone } : {}),
       },
     });
 

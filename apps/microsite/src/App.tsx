@@ -454,6 +454,7 @@ function PhoneEntry({
         runner_user_id: auth.runner_user_id,
         workspace_id: auth.workspace_id,
         phone_number: normalized,
+        time_zone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       });
       window.location.href = redirectUrl;
     } catch (err) {

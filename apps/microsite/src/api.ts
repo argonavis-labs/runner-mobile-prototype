@@ -129,6 +129,7 @@ export async function initImessageLink(args: {
   runner_user_id: string;
   workspace_id: string;
   phone_number: string; // E.164
+  time_zone?: string;
 }): Promise<{ redirectUrl: string }> {
   const res = await fetch(`${SERVER_URL}/api/link/init`, {
     method: "POST",

@@ -9,6 +9,7 @@ export const users = pgTable("users", {
   jwtExpiresAt: timestamp("jwt_expires_at", { withTimezone: true }).notNull(),
   spectrumUserId: text("spectrum_user_id").notNull(),
   assignedPhoneNumber: text("assigned_phone_number"),
+  timeZone: text("time_zone"),
   managedAgentId: text("managed_agent_id"),
   managedAgentVersion: integer("managed_agent_version"),
   managedAgentVaultId: text("managed_agent_vault_id"),
@@ -16,6 +17,8 @@ export const users = pgTable("users", {
   runnerContactSentAt: timestamp("runner_contact_sent_at", { withTimezone: true }),
   lastUserMsgAt: timestamp("last_user_msg_at", { withTimezone: true }),
   lastAssistantMsgAt: timestamp("last_assistant_msg_at", { withTimezone: true }),
+  lastHeartbeatTickAt: timestamp("last_heartbeat_tick_at", { withTimezone: true }),
+  lastHeartbeatSlot: text("last_heartbeat_slot"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
