@@ -13,6 +13,7 @@ export const users = pgTable("users", {
   managedAgentVersion: integer("managed_agent_version"),
   managedAgentVaultId: text("managed_agent_vault_id"),
   managedAgentsSessionId: text("managed_agents_session_id"),
+  runnerContactSentAt: timestamp("runner_contact_sent_at", { withTimezone: true }),
   lastUserMsgAt: timestamp("last_user_msg_at", { withTimezone: true }),
   lastAssistantMsgAt: timestamp("last_assistant_msg_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

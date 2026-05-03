@@ -11,7 +11,12 @@ import { eq, sql, isNotNull } from "drizzle-orm";
 import { db, users, type User } from "@runner-mobile/db";
 import { getCatalog, refreshIfExpired } from "@runner-mobile/runner-api";
 import { resumeOrSpawnAndRun } from "@runner-mobile/managed-agents";
-import { sendOutbound, type SpectrumApp } from "@runner-mobile/spectrum";
+import {
+  sendOutbound,
+  sendRunnerContactCard,
+  type ExtractedImage,
+  type SpectrumApp,
+} from "@runner-mobile/spectrum";
 
 const FALLBACK_REPLY = (microsite: string) =>
   `Hi 👋 I don't recognize this number yet. Head to ${microsite} to get set up.`;
@@ -21,8 +26,9 @@ export async function handleInboundMessage(opts: {
   spectrumApp: SpectrumApp;
   phoneNumber: string;
   text: string;
+  images?: ExtractedImage[];
 }): Promise<void> {
-  const { spectrumApp, phoneNumber, text } = opts;
+  const { spectrumApp, phoneNumber, text, images = [] } = opts;
   const sendImessage = (msg: string) => sendOutbound(spectrumApp, phoneNumber, msg);
 
   try {
@@ -33,6 +39,18 @@ export async function handleInboundMessage(opts: {
       return;
     }
 
+    if (!user.runnerContactSentAt && user.assignedPhoneNumber) {
+      try {
+        await sendRunnerContactCard(spectrumApp, phoneNumber, user.assignedPhoneNumber);
+        await db
+          .update(users)
+          .set({ runnerContactSentAt: sql`now()` })
+          .where(eq(users.phoneNumber, user.phoneNumber));
+      } catch (err) {
+        console.error("failed to send Runner contact card:", err);
+      }
+    }
+
     const refreshed = await refreshIfExpired(user);
     const catalog = await getCatalog(refreshed.jwt, refreshed.workspaceId);
 
@@ -40,6 +58,7 @@ export async function handleInboundMessage(opts: {
       user: refreshed,
       catalog,
       userMessage: text,
+      images,
       onSendIMessage: sendImessage,
     });
 

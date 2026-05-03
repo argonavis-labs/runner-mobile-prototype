@@ -11,7 +11,7 @@ function isQuietHours(now = new Date()): boolean {
   return hour < 9 || hour >= 20;
 }
 
-export function makeCronRouter(spectrumApp: SpectrumApp): Router {
+export function makeCronRouter(getSpectrumApp: () => SpectrumApp | null): Router {
   const router = Router();
 
   router.post("/tick", async (req, res) => {
@@ -24,6 +24,12 @@ export function makeCronRouter(spectrumApp: SpectrumApp): Router {
 
     if (isQuietHours()) {
       res.json({ skipped: "quiet_hours" });
+      return;
+    }
+
+    const spectrumApp = getSpectrumApp();
+    if (!spectrumApp) {
+      res.status(503).json({ error: "spectrum_unavailable" });
       return;
     }
 
