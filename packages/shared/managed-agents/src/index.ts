@@ -3,14 +3,14 @@
  *
  * Per-user lifecycle:
  *   - one Agent — carries MCP server URLs (Composio + first-party), system
- *     prompt, custom send_imessage tool. Versioned; we update + bump.
+ *     prompt, custom send_imessage_bubbles tool. Versioned; we update + bump.
  *   - one Vault — holds static-bearer Credentials (one per MCP server URL),
  *     each with the user's Runner JWT. Credentials are reconciled before
  *     every session turn so a JWT rotation re-syncs all of them.
  *   - one Session — references the agent + vault; resumes across messages
  *     so memory persists in the harness's filesystem.
  *
- * The agent communicates with the user via the `send_imessage` custom tool;
+ * The agent communicates with the user via the `send_imessage_bubbles` custom tool;
  * the webhook/cron handler intercepts these calls and dispatches via Spectrum.
  *
  * All types come from the SDK (`@anthropic-ai/sdk` 0.92+). No type fabrication.
@@ -52,13 +52,13 @@ Defaults:
 - Remember everything. Use the filesystem to persist user preferences, ongoing threads, names, projects, recurring tasks. Carry context across messages.
 
 iMessage style:
-- Short bubbles. Multiple short messages beat a wall of text.
+- Short bubbles. Multiple short messages beat a wall of text. If an answer has more than one idea, send 2-4 bubbles.
 - Plain text only. iMessage will not render Markdown reliably, so do not use Markdown headings, tables, code fences, blockquotes, or link formatting. Use simple punctuation and line breaks instead.
-- For long answers, call send_imessage multiple times with one self-contained bubble per idea instead of sending one large message.
+- Use send_imessage_bubbles with one self-contained bubble per idea. Each bubble should be short enough to read at a glance.
 - Casual, direct, competent. No corporate hedging, no "I'd be happy to."
 - Lead with the answer or the action. Skip preambles.
 
-ALWAYS communicate via the send_imessage tool — never reply with plain text. Tool calls are cheap; use them liberally before responding.`;
+ALWAYS communicate via the send_imessage_bubbles tool — never reply with plain text. Tool calls are cheap; use them liberally before responding.`;
 
 // Sonnet 4.6 — cost/speed step down from Opus 4.7. Managed Agents'
 // model config only exposes `id` and `speed: standard|fast`; there is no
@@ -66,6 +66,9 @@ ALWAYS communicate via the send_imessage tool — never reply with plain text. T
 // `agent.thinking` events but doesn't let you control the budget).
 const MODEL = "claude-sonnet-4-6";
 const BETA_HEADER = "managed-agents-2026-04-01";
+const OUTPUT_CONTRACT_VERSION = "imessage-bubbles-v1";
+const MAX_BUBBLES_PER_TOOL_CALL = 6;
+const MAX_IMESSAGE_BUBBLE_CHARS = 280;
 
 let _client: Anthropic | null = null;
 function client(): Anthropic {
@@ -122,17 +125,36 @@ function buildMcpServers(catalog: CatalogItem[], workspaceId: string): McpServer
     );
 }
 
-const SEND_IMESSAGE_TOOL: BetaManagedAgentsCustomToolParams = {
+const SEND_IMESSAGE_BUBBLES_TOOL: BetaManagedAgentsCustomToolParams = {
   type: "custom",
-  name: "send_imessage",
+  name: "send_imessage_bubbles",
   description:
-    "Send a plain-text message to the user via iMessage. This is the only way to communicate with the user. Call once per outgoing message. Do not use Markdown.",
+    "Send one or more plain-text iMessage bubbles to the user. Each array item is delivered as a separate bubble. Use 2-4 bubbles for multi-idea answers. Do not use Markdown.",
   input_schema: {
     type: "object",
     properties: {
-      message: { type: "string", description: "The text to send to the user" },
+      bubbles: {
+        type: "array",
+        description:
+          "Separate iMessage bubbles. Each bubble must be plain text, self-contained, and short.",
+        minItems: 1,
+        maxItems: MAX_BUBBLES_PER_TOOL_CALL,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            text: {
+              type: "string",
+              description: "Plain text for one iMessage bubble. No Markdown.",
+              minLength: 1,
+              maxLength: MAX_IMESSAGE_BUBBLE_CHARS,
+            },
+          },
+          required: ["text"],
+        },
+      },
     },
-    required: ["message"],
+    required: ["bubbles"],
   },
 };
 
@@ -142,7 +164,7 @@ const SEND_IMESSAGE_TOOL: BetaManagedAgentsCustomToolParams = {
  * stored version on a real change.
  *
  * Tool array (in order):
- *   1. send_imessage — custom tool, the only way the agent talks to the user.
+ *   1. send_imessage_bubbles — custom tool, the only way the agent talks to the user.
  *   2. agent_toolset_20260401 — built-in web search / fetch / bash / file ops.
  *      Always present so users with zero MCP connections still get something
  *      useful. always_allow so we never hit a confirmation gate.
@@ -161,7 +183,12 @@ const AGENT_TOOLSET: BetaManagedAgentsAgentToolset20260401Params = {
   default_config: ALWAYS_ALLOW,
 };
 
-export async function ensureAgent(user: User, catalog: CatalogItem[]): Promise<string> {
+type EnsuredAgent = {
+  id: string;
+  version: number;
+};
+
+export async function ensureAgent(user: User, catalog: CatalogItem[]): Promise<EnsuredAgent> {
   const c = client();
   const mcpServers: BetaManagedAgentsURLMCPServerParams[] = buildMcpServers(
     catalog,
@@ -172,7 +199,7 @@ export async function ensureAgent(user: User, catalog: CatalogItem[]): Promise<s
     mcp_server_name: s.name,
     default_config: ALWAYS_ALLOW,
   }));
-  const tools = [SEND_IMESSAGE_TOOL, AGENT_TOOLSET, ...mcpToolsets];
+  const tools = [SEND_IMESSAGE_BUBBLES_TOOL, AGENT_TOOLSET, ...mcpToolsets];
 
   if (user.managedAgentId && user.managedAgentVersion != null) {
     const params: AgentUpdateParams = {
@@ -191,7 +218,7 @@ export async function ensureAgent(user: User, catalog: CatalogItem[]): Promise<s
         .set({ managedAgentVersion: updated.version })
         .where(eq(users.phoneNumber, user.phoneNumber));
     }
-    return user.managedAgentId;
+    return { id: user.managedAgentId, version: updated.version };
   }
 
   const createParams: AgentCreateParams = {
@@ -208,7 +235,7 @@ export async function ensureAgent(user: User, catalog: CatalogItem[]): Promise<s
     .set({ managedAgentId: agent.id, managedAgentVersion: agent.version })
     .where(eq(users.phoneNumber, user.phoneNumber));
 
-  return agent.id;
+  return { id: agent.id, version: agent.version };
 }
 
 /**
@@ -278,14 +305,35 @@ export async function ensureVaultAndCredentials(
 export async function ensureSession(
   user: User,
   agentId: string,
+  agentVersion: number,
   vaultId: string,
 ): Promise<string> {
-  if (user.managedAgentsSessionId) return user.managedAgentsSessionId;
+  const c = client();
+  if (user.managedAgentsSessionId) {
+    try {
+      const existing = await c.beta.sessions.retrieve(user.managedAgentsSessionId);
+      const currentContract =
+        existing.agent.id === agentId &&
+        existing.agent.version === agentVersion &&
+        existing.metadata.output_contract_version === OUTPUT_CONTRACT_VERSION &&
+        existing.archived_at === null &&
+        existing.status !== "terminated";
+
+      if (currentContract) return user.managedAgentsSessionId;
+
+      await c.beta.sessions.archive(user.managedAgentsSessionId).catch((err) => {
+        console.warn("failed to archive stale managed-agent session:", err);
+      });
+    } catch (err) {
+      console.warn("failed to inspect managed-agent session; creating a fresh one:", err);
+    }
+  }
 
   const environmentId = await getEnvironmentId();
-  const session = await client().beta.sessions.create({
+  const session = await c.beta.sessions.create({
     agent: agentId,
     environment_id: environmentId,
+    metadata: { output_contract_version: OUTPUT_CONTRACT_VERSION },
     vault_ids: [vaultId],
   });
 
@@ -299,7 +347,7 @@ export async function ensureSession(
 
 /**
  * Run one turn: open stream, send user message, drain events, intercept
- * `send_imessage` tool calls and dispatch via the provided callback.
+ * `send_imessage_bubbles` tool calls and dispatch via the provided callback.
  *
  * Returns true if the agent sent at least one iMessage during the turn.
  */
@@ -349,18 +397,21 @@ export async function runTurn(opts: {
             continue;
           }
           let resultText = "ok";
-          if (tu.name === "send_imessage") {
-            const message = (tu.input as { message?: unknown }).message;
-            if (typeof message === "string" && message.trim().length > 0) {
-              try {
-                await opts.onSendIMessage(toPlainIMessageText(message));
-                sentAnyImessage = true;
-                resultText = "delivered";
-              } catch (err) {
-                resultText = `error: ${err instanceof Error ? err.message : String(err)}`;
+          if (tu.name === "send_imessage_bubbles") {
+            const parsed = parseIMessageBubbles(tu.input);
+            if (parsed.ok) {
+              for (const bubble of parsed.bubbles) {
+                try {
+                  await opts.onSendIMessage(bubble);
+                  sentAnyImessage = true;
+                } catch (err) {
+                  resultText = `error: ${err instanceof Error ? err.message : String(err)}`;
+                  break;
+                }
               }
+              if (resultText === "ok") resultText = `delivered ${parsed.bubbles.length} bubble(s)`;
             } else {
-              resultText = "error: missing or empty message";
+              resultText = `invalid iMessage payload: ${parsed.error} Retry by calling send_imessage_bubbles with short plain-text bubbles.`;
             }
           } else {
             resultText = `error: unknown tool ${tu.name}`;
@@ -395,29 +446,68 @@ export async function runTurn(opts: {
   return sentAnyImessage;
 }
 
-export function toPlainIMessageText(text: string): string {
-  return text
-    .replace(/\r\n/g, "\n")
-    .replace(/```(?:[a-zA-Z0-9_-]+)?\n?([\s\S]*?)```/g, "$1")
-    .replace(/`([^`\n]+)`/g, "$1")
-    .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, "$1: $2")
-    .split("\n")
-    .map((line) =>
-      line
-        .replace(/^\s{0,3}#{1,6}\s+/g, "")
-        .replace(/^\s{0,3}>\s?/g, "")
-        .replace(/^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/g, "")
-        .replace(/([*_~])\1([^*_~\n]+)\1\1/g, "$2")
-        .replace(/([*_])([^*_\n]+)\1/g, "$2")
-        .replace(/~~([^~\n]+)~~/g, "$1")
-        .trimEnd(),
-    )
-    .filter((line, index, lines) => {
-      if (line.trim().length > 0) return true;
-      return index > 0 && index < lines.length - 1 && lines[index - 1]?.trim() !== "";
-    })
-    .join("\n")
-    .trim();
+type ParsedBubbles =
+  | { ok: true; bubbles: string[] }
+  | { ok: false; error: string };
+
+function parseIMessageBubbles(input: unknown): ParsedBubbles {
+  if (!isRecord(input)) return { ok: false, error: "tool input must be an object" };
+  const bubblesInput = input.bubbles;
+  if (!Array.isArray(bubblesInput)) {
+    return { ok: false, error: "`bubbles` must be an array" };
+  }
+  if (bubblesInput.length === 0) {
+    return { ok: false, error: "`bubbles` must include at least one bubble" };
+  }
+  if (bubblesInput.length > MAX_BUBBLES_PER_TOOL_CALL) {
+    return {
+      ok: false,
+      error: `send at most ${MAX_BUBBLES_PER_TOOL_CALL} bubbles per tool call`,
+    };
+  }
+
+  const bubbles: string[] = [];
+  for (const [index, bubbleInput] of bubblesInput.entries()) {
+    if (!isRecord(bubbleInput) || typeof bubbleInput.text !== "string") {
+      return { ok: false, error: `bubble ${index + 1} must have a text string` };
+    }
+
+    const text = bubbleInput.text.trim();
+    if (!text) return { ok: false, error: `bubble ${index + 1} is empty` };
+    if (text.length > MAX_IMESSAGE_BUBBLE_CHARS) {
+      return {
+        ok: false,
+        error: `bubble ${index + 1} is ${text.length} characters; max is ${MAX_IMESSAGE_BUBBLE_CHARS}`,
+      };
+    }
+    if (containsMarkdown(text)) {
+      return {
+        ok: false,
+        error: `bubble ${index + 1} contains Markdown; use plain iMessage text`,
+      };
+    }
+
+    bubbles.push(text);
+  }
+
+  return { ok: true, bubbles };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function containsMarkdown(text: string): boolean {
+  return [
+    /```/,
+    /`[^`\n]+`/,
+    /^\s{0,3}#{1,6}\s+/m,
+    /^\s{0,3}>\s+/m,
+    /\[[^\]\n]+\]\([^)]+\)/,
+    /(^|[^\w])(\*\*|__)[^*_]+(\*\*|__)(?!\w)/,
+    /(^|[^\w])~~[^~]+~~(?!\w)/,
+    /^\s*\|.*\|\s*$/m,
+  ].some((pattern) => pattern.test(text));
 }
 
 /**
@@ -431,9 +521,9 @@ export async function resumeOrSpawnAndRun(opts: {
   userMessage: string;
   onSendIMessage: (text: string) => Promise<void>;
 }): Promise<boolean> {
-  const agentId = await ensureAgent(opts.user, opts.catalog);
+  const agent = await ensureAgent(opts.user, opts.catalog);
   const vaultId = await ensureVaultAndCredentials(opts.user, opts.catalog);
-  const sessionId = await ensureSession(opts.user, agentId, vaultId);
+  const sessionId = await ensureSession(opts.user, agent.id, agent.version, vaultId);
   return runTurn({
     sessionId,
     userMessage: opts.userMessage,
