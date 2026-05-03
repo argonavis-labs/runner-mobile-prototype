@@ -3,7 +3,7 @@
 //
 // Railway cron schedule: every 15 minutes. Quiet-hours filter lives in the server.
 
-const SERVER_URL = process.env.SERVER_PUBLIC_URL ?? "http://localhost:3001";
+const SERVER_URL = process.env.SERVER_PUBLIC_URL ?? "http://localhost:4001";
 const SECRET = process.env.CRON_SHARED_SECRET;
 
 if (!SECRET) {

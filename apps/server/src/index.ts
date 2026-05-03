@@ -6,7 +6,7 @@ import { linkRouter } from "./routes/link.ts";
 import { makeCronRouter } from "./routes/cron.ts";
 import { memoryRouter } from "./routes/memory.ts";
 
-const PORT = Number(process.env.PORT ?? 3001);
+const PORT = Number(process.env.PORT ?? 4001);
 
 type ServiceState = {
   spectrumReady: boolean;

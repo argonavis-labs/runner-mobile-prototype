@@ -12,6 +12,7 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "db:migrate": "sh -c 'set -a; [ ! -f .env ] || . ./.env; set +a; pnpm --filter @runner-mobile/db migrate'",
+    "dev": "sh -c 'set -a; [ ! -f .env ] || . ./.env; set +a; pnpm --filter @runner-mobile/server dev & pnpm --filter @runner-mobile/microsite dev & wait'",
     "dev:server": "sh -c 'set -a; [ ! -f .env ] || . ./.env; set +a; pnpm --filter @runner-mobile/server dev'",
     "dev:microsite": "pnpm --filter @runner-mobile/microsite dev",
     "cron": "sh -c 'set -a; [ ! -f .env ] || . ./.env; set +a; pnpm --filter @runner-mobile/cron start'",
