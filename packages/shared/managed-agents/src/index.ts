@@ -126,7 +126,7 @@ const SEND_IMESSAGE_TOOL: BetaManagedAgentsCustomToolParams = {
   type: "custom",
   name: "send_imessage",
   description:
-    "Send a message to the user via iMessage. This is the only way to communicate with the user. Call once per outgoing message.",
+    "Send a plain-text message to the user via iMessage. This is the only way to communicate with the user. Call once per outgoing message. Do not use Markdown.",
   input_schema: {
     type: "object",
     properties: {
@@ -353,7 +353,7 @@ export async function runTurn(opts: {
             const message = (tu.input as { message?: unknown }).message;
             if (typeof message === "string" && message.trim().length > 0) {
               try {
-                await opts.onSendIMessage(message);
+                await opts.onSendIMessage(toPlainIMessageText(message));
                 sentAnyImessage = true;
                 resultText = "delivered";
               } catch (err) {
@@ -393,6 +393,31 @@ export async function runTurn(opts: {
   }
 
   return sentAnyImessage;
+}
+
+export function toPlainIMessageText(text: string): string {
+  return text
+    .replace(/\r\n/g, "\n")
+    .replace(/```(?:[a-zA-Z0-9_-]+)?\n?([\s\S]*?)```/g, "$1")
+    .replace(/`([^`\n]+)`/g, "$1")
+    .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, "$1: $2")
+    .split("\n")
+    .map((line) =>
+      line
+        .replace(/^\s{0,3}#{1,6}\s+/g, "")
+        .replace(/^\s{0,3}>\s?/g, "")
+        .replace(/^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/g, "")
+        .replace(/([*_~])\1([^*_~\n]+)\1\1/g, "$2")
+        .replace(/([*_])([^*_\n]+)\1/g, "$2")
+        .replace(/~~([^~\n]+)~~/g, "$1")
+        .trimEnd(),
+    )
+    .filter((line, index, lines) => {
+      if (line.trim().length > 0) return true;
+      return index > 0 && index < lines.length - 1 && lines[index - 1]?.trim() !== "";
+    })
+    .join("\n")
+    .trim();
 }
 
 /**
