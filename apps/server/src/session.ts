@@ -11,7 +11,11 @@ import { eq, sql, isNotNull } from "drizzle-orm";
 import { db, users, type User } from "@runner-mobile/db";
 import { getCatalog, refreshIfExpired } from "@runner-mobile/runner-api";
 import { resumeOrSpawnAndRun } from "@runner-mobile/managed-agents";
-import { sendOutbound, type SpectrumApp } from "@runner-mobile/spectrum";
+import {
+  sendOutbound,
+  sendRunnerContactCard,
+  type SpectrumApp,
+} from "@runner-mobile/spectrum";
 
 const FALLBACK_REPLY = (microsite: string) =>
   `Hi 👋 I don't recognize this number yet. Head to ${microsite} to get set up.`;
@@ -31,6 +35,18 @@ export async function handleInboundMessage(opts: {
       const microsite = process.env.MICROSITE_PUBLIC_URL ?? "the Runner microsite";
       await sendImessage(FALLBACK_REPLY(microsite));
       return;
+    }
+
+    if (!user.runnerContactSentAt && user.assignedPhoneNumber) {
+      try {
+        await sendRunnerContactCard(spectrumApp, phoneNumber, user.assignedPhoneNumber);
+        await db
+          .update(users)
+          .set({ runnerContactSentAt: sql`now()` })
+          .where(eq(users.phoneNumber, user.phoneNumber));
+      } catch (err) {
+        console.error("failed to send Runner contact card:", err);
+      }
     }
 
     const refreshed = await refreshIfExpired(user);

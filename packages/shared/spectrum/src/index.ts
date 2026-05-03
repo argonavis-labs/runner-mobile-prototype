@@ -15,7 +15,15 @@
  * extended only by the base `User = { id: string }`.)
  */
 
-import { Spectrum, type SpectrumInstance, type Space, type Message } from "spectrum-ts";
+import { deflateSync } from "node:zlib";
+import {
+  Spectrum,
+  contact,
+  type SpectrumInstance,
+  type Space,
+  type Message,
+  type ContentBuilder,
+} from "spectrum-ts";
 import { imessage } from "spectrum-ts/providers/imessage";
 
 export type SpectrumApp = SpectrumInstance;
@@ -58,6 +66,37 @@ export async function sendOutbound(
 ): Promise<void> {
   const space = await resolveSpace(app, phoneNumber);
   await app.send(space, text);
+}
+
+export async function sendRunnerContactCard(
+  app: SpectrumApp,
+  phoneNumber: string,
+  runnerPhoneNumber: string,
+): Promise<void> {
+  const space = await resolveSpace(app, phoneNumber);
+  await app.send(space, runnerContactCard(runnerPhoneNumber));
+}
+
+export function runnerContactCard(runnerPhoneNumber: string): ContentBuilder {
+  return contact({
+    name: {
+      formatted: "Runner",
+      first: "Runner",
+    },
+    phones: [
+      {
+        value: runnerPhoneNumber,
+        type: "mobile",
+      },
+    ],
+    org: {
+      name: "Runner",
+    },
+    photo: {
+      mimeType: "image/png",
+      read: async () => runnerLogoPng(),
+    },
+  });
 }
 
 export type InboundHandler = (opts: {
@@ -264,6 +303,76 @@ function projectId(): string {
   const id = process.env.SPECTRUM_PROJECT_ID;
   if (!id) throw new Error("SPECTRUM_PROJECT_ID is required");
   return id;
+}
+
+let _runnerLogoPng: Buffer | null = null;
+
+function runnerLogoPng(): Buffer {
+  if (_runnerLogoPng) return _runnerLogoPng;
+
+  const size = 512;
+  const data = Buffer.alloc((size * 4 + 1) * size);
+  for (let y = 0; y < size; y += 1) {
+    const row = y * (size * 4 + 1);
+    data[row] = 0;
+    for (let x = 0; x < size; x += 1) {
+      const offset = row + 1 + x * 4;
+      const inMark = isRunnerLogoPixel(x, y);
+      data[offset] = inMark ? 255 : 14;
+      data[offset + 1] = inMark ? 255 : 16;
+      data[offset + 2] = inMark ? 255 : 20;
+      data[offset + 3] = 255;
+    }
+  }
+
+  _runnerLogoPng = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk("IHDR", pngIhdr(size, size)),
+    pngChunk("IDAT", deflateSync(data)),
+    pngChunk("IEND", Buffer.alloc(0)),
+  ]);
+  return _runnerLogoPng;
+}
+
+function isRunnerLogoPixel(x: number, y: number): boolean {
+  const stem = x >= 132 && x <= 204 && y >= 116 && y <= 396;
+  const top = x >= 132 && x <= 326 && y >= 116 && y <= 184;
+  const right = x >= 298 && x <= 372 && y >= 154 && y <= 258;
+  const mid = x >= 132 && x <= 326 && y >= 242 && y <= 306;
+  const leg = x >= 244 && x <= 326 && y >= 282 && y <= 396 && x - y >= -88;
+  return stem || top || right || mid || leg;
+}
+
+function pngIhdr(width: number, height: number): Buffer {
+  const buf = Buffer.alloc(13);
+  buf.writeUInt32BE(width, 0);
+  buf.writeUInt32BE(height, 4);
+  buf[8] = 8;
+  buf[9] = 6;
+  buf[10] = 0;
+  buf[11] = 0;
+  buf[12] = 0;
+  return buf;
+}
+
+function pngChunk(type: string, data: Buffer): Buffer {
+  const typeBuf = Buffer.from(type, "ascii");
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(data.length, 0);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(Buffer.concat([typeBuf, data])), 0);
+  return Buffer.concat([len, typeBuf, data, crc]);
+}
+
+function crc32(buf: Buffer): number {
+  let crc = 0xffffffff;
+  for (const byte of buf) {
+    crc ^= byte;
+    for (let i = 0; i < 8; i += 1) {
+      crc = crc & 1 ? 0xedb88320 ^ (crc >>> 1) : crc >>> 1;
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
 }
 
 export type SharedUser = {
