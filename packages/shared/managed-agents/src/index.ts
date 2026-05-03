@@ -32,8 +32,10 @@ import type {
 } from "@anthropic-ai/sdk/resources/beta/vaults/credentials";
 import type {
   BetaManagedAgentsAgentCustomToolUseEvent,
+  BetaManagedAgentsImageBlock,
   BetaManagedAgentsSessionStatusIdleEvent,
   BetaManagedAgentsStreamSessionEvents,
+  BetaManagedAgentsTextBlock,
   EventSendParams,
 } from "@anthropic-ai/sdk/resources/beta/sessions/events";
 import { eq } from "drizzle-orm";
@@ -354,16 +356,28 @@ export async function ensureSession(
 export async function runTurn(opts: {
   sessionId: string;
   userMessage: string;
+  images?: ManagedAgentImage[];
   onSendIMessage: (text: string) => Promise<void>;
 }): Promise<boolean> {
   const c = client();
   const stream = await c.beta.sessions.events.stream(opts.sessionId);
+  const userContent: Array<BetaManagedAgentsTextBlock | BetaManagedAgentsImageBlock> = [
+    { type: "text", text: opts.userMessage },
+    ...(opts.images ?? []).map((image) => ({
+      type: "image" as const,
+      source: {
+        type: "base64" as const,
+        data: image.data,
+        media_type: image.mimeType,
+      },
+    })),
+  ];
 
   const userMessageEvents: EventSendParams = {
     events: [
       {
         type: "user.message",
-        content: [{ type: "text", text: opts.userMessage }],
+        content: userContent,
       },
     ],
   };
@@ -450,6 +464,11 @@ type ParsedBubbles =
   | { ok: true; bubbles: string[] }
   | { ok: false; error: string };
 
+export type ManagedAgentImage = {
+  data: string;
+  mimeType: "image/gif" | "image/jpeg" | "image/png" | "image/webp";
+};
+
 function parseIMessageBubbles(input: unknown): ParsedBubbles {
   if (!isRecord(input)) return { ok: false, error: "tool input must be an object" };
   const bubblesInput = input.bubbles;
@@ -519,6 +538,7 @@ export async function resumeOrSpawnAndRun(opts: {
   user: User;
   catalog: CatalogItem[];
   userMessage: string;
+  images?: ManagedAgentImage[];
   onSendIMessage: (text: string) => Promise<void>;
 }): Promise<boolean> {
   const agent = await ensureAgent(opts.user, opts.catalog);
@@ -527,6 +547,7 @@ export async function resumeOrSpawnAndRun(opts: {
   return runTurn({
     sessionId,
     userMessage: opts.userMessage,
+    images: opts.images,
     onSendIMessage: opts.onSendIMessage,
   });
 }

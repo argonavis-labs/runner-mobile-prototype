@@ -51,8 +51,8 @@ async function main() {
     state.spectrumError = null;
 
     // Background loop never returns under normal operation.
-    consumeInboundMessages(spectrumApp, async ({ phoneNumber, text }) => {
-      await handleInboundMessage({ spectrumApp: spectrumApp!, phoneNumber, text });
+    consumeInboundMessages(spectrumApp, async ({ phoneNumber, text, images }) => {
+      await handleInboundMessage({ spectrumApp: spectrumApp!, phoneNumber, text, images });
     }).catch((err) => {
       state.spectrumReady = false;
       state.spectrumError = err instanceof Error ? err.message : String(err);

@@ -14,6 +14,7 @@ import { resumeOrSpawnAndRun } from "@runner-mobile/managed-agents";
 import {
   sendOutbound,
   sendRunnerContactCard,
+  type ExtractedImage,
   type SpectrumApp,
 } from "@runner-mobile/spectrum";
 
@@ -25,8 +26,9 @@ export async function handleInboundMessage(opts: {
   spectrumApp: SpectrumApp;
   phoneNumber: string;
   text: string;
+  images?: ExtractedImage[];
 }): Promise<void> {
-  const { spectrumApp, phoneNumber, text } = opts;
+  const { spectrumApp, phoneNumber, text, images = [] } = opts;
   const sendImessage = (msg: string) => sendOutbound(spectrumApp, phoneNumber, msg);
 
   try {
@@ -56,6 +58,7 @@ export async function handleInboundMessage(opts: {
       user: refreshed,
       catalog,
       userMessage: text,
+      images,
       onSendIMessage: sendImessage,
     });
 

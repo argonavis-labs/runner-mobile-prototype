@@ -24,12 +24,15 @@ import {
   type ContentBuilder,
 } from "spectrum-ts";
 import { imessage } from "spectrum-ts/providers/imessage";
-import { extractMessageText } from "./message-text";
+import { extractMessage } from "./message-text";
+import type { ExtractedImage } from "./message-text";
 
-export { extractMessageText, isAudioMimeType } from "./message-text";
+export { extractMessage, extractMessageText, isAudioMimeType } from "./message-text";
 export type {
   AudioTranscriber,
   AudioTranscriptionInput,
+  ExtractedImage,
+  ExtractedMessage,
   ExtractMessageTextOptions,
 } from "./message-text";
 
@@ -109,6 +112,7 @@ export function runnerContactCard(runnerPhoneNumber: string): ContentBuilder {
 export type InboundHandler = (opts: {
   phoneNumber: string;
   text: string;
+  images: ExtractedImage[];
   reply: (text: string) => Promise<void>;
 }) => Promise<void>;
 
@@ -128,23 +132,29 @@ export async function consumeInboundMessages(
   for await (const [space, message] of app.messages) {
     try {
       const phoneNumber = message.sender.id;
-      const text = await extractMessageText(message);
+      const extracted = await extractMessage(message);
 
       const reply = async (t: string) => {
         const out = await message.reply(t);
         if (!out) throw new Error("reply returned undefined");
       };
 
-      if (!phoneNumber || !text) {
-        console.warn("inbound skipped: missing phone or text", {
+      if (!phoneNumber || (!extracted.text && extracted.images.length === 0)) {
+        console.warn("inbound skipped: missing phone or content", {
           phoneNumber: phoneNumber || "<empty>",
-          hasText: text.length > 0,
+          hasText: extracted.text.length > 0,
+          imageCount: extracted.images.length,
         });
         continue;
       }
 
       await space.responding(async () => {
-        await handler({ phoneNumber, text, reply });
+        await handler({
+          phoneNumber,
+          text: extracted.text,
+          images: extracted.images,
+          reply,
+        });
       });
     } catch (err) {
       console.error("inbound handler failed:", err);

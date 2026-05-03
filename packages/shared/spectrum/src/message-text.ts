@@ -22,48 +22,79 @@ export type ExtractMessageTextOptions = {
   transcribeAudio?: AudioTranscriber;
 };
 
+export type ExtractedImage = {
+  data: string;
+  mimeType: SupportedImageMimeType;
+  name: string;
+};
+
+export type ExtractedMessage = {
+  text: string;
+  images: ExtractedImage[];
+};
+
 export async function extractMessageText(
   message: Pick<Message, "content">,
   opts: ExtractMessageTextOptions = {},
 ): Promise<string> {
-  return extractContentText(message.content, opts);
+  return (await extractMessage(message, opts)).text;
 }
 
-async function extractContentText(
+export async function extractMessage(
+  message: Pick<Message, "content">,
+  opts: ExtractMessageTextOptions = {},
+): Promise<ExtractedMessage> {
+  return extractContent(message.content, opts);
+}
+
+async function extractContent(
   content: ExtractableContent,
   opts: ExtractMessageTextOptions,
-): Promise<string> {
+): Promise<ExtractedMessage> {
   switch (content.type) {
     case "text":
-      return content.text;
+      return textOnly(content.text);
     case "voice":
-      return transcribeAudioContent(content, opts);
+      return textOnly(await transcribeAudioContent(content, opts));
     case "attachment":
       if (isAudioAttachment(content)) {
-        return transcribeAudioContent(content, opts);
+        return textOnly(await transcribeAudioContent(content, opts));
       }
-      return `Attachment received: ${content.name} (${content.mimeType})`;
+      if (isImageAttachment(content)) {
+        return imageContent(content);
+      }
+      return textOnly(`Attachment received: ${content.name} (${content.mimeType})`);
     case "effect":
-      return extractContentText(content.content, opts);
+      return extractContent(content.content, opts);
     case "group": {
-      const parts = await Promise.all(
-        content.items.map((item) => extractMessageText(item, opts)),
-      );
-      return parts.filter(Boolean).join("\n\n");
+      const parts = await Promise.all(content.items.map((item) => extractMessage(item, opts)));
+      return {
+        text: parts
+          .map((part) => part.text)
+          .filter(Boolean)
+          .join("\n\n"),
+        images: parts.flatMap((part) => part.images),
+      };
     }
     case "contact":
-      return "Contact card received.";
+      return textOnly("Contact card received.");
     case "poll":
-      return `Poll received: ${content.title}`;
+      return textOnly(`Poll received: ${content.title}`);
     case "poll_option":
-      return `Poll option ${content.selected ? "selected" : "deselected"}: ${content.title}`;
+      return textOnly(
+        `Poll option ${content.selected ? "selected" : "deselected"}: ${content.title}`,
+      );
     case "reaction":
-      return `Reaction received: ${content.emoji}`;
+      return textOnly(`Reaction received: ${content.emoji}`);
     case "richlink":
-      return `Link received: ${content.url.toString()}`;
+      return textOnly(`Link received: ${content.url.toString()}`);
     case "custom":
-      return "Unsupported message content received.";
+      return textOnly("Unsupported message content received.");
   }
+}
+
+function textOnly(text: string): ExtractedMessage {
+  return { text, images: [] };
 }
 
 async function transcribeAudioContent(
@@ -100,6 +131,18 @@ function isAudioAttachment(content: Extract<MessageContent, { type: "attachment"
 
 function isAudioFileName(name: string): boolean {
   return AUDIO_FILE_EXTENSIONS.has(fileExtension(name));
+}
+
+function isImageAttachment(content: Extract<MessageContent, { type: "attachment" }>): boolean {
+  return isImageMimeType(content.mimeType) || isImageFileName(content.name);
+}
+
+function isImageMimeType(mimeType: string): boolean {
+  return normalizeMimeType(mimeType).startsWith("image/");
+}
+
+function isImageFileName(name: string): boolean {
+  return IMAGE_FILE_EXTENSIONS.has(fileExtension(name));
 }
 
 const AUDIO_FILE_EXTENSIONS = new Set([
@@ -162,6 +205,40 @@ const OPENAI_AUDIO_MIME_BY_EXTENSION = new Map([
 const OPENAI_AUDIO_EXTENSION_BY_MIME = new Map(
   [...OPENAI_AUDIO_MIME_BY_EXTENSION].map(([ext, mimeType]) => [mimeType, ext]),
 );
+
+const IMAGE_FILE_EXTENSIONS = new Set([
+  ".bmp",
+  ".gif",
+  ".heic",
+  ".heif",
+  ".jpeg",
+  ".jpg",
+  ".png",
+  ".tif",
+  ".tiff",
+  ".webp",
+]);
+
+const SUPPORTED_IMAGE_MIME_TYPES = new Set([
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+] as const);
+
+type SupportedImageMimeType =
+  | "image/gif"
+  | "image/jpeg"
+  | "image/png"
+  | "image/webp";
+
+const IMAGE_MIME_BY_EXTENSION = new Map<string, SupportedImageMimeType>([
+  [".gif", "image/gif"],
+  [".jpeg", "image/jpeg"],
+  [".jpg", "image/jpeg"],
+  [".png", "image/png"],
+  [".webp", "image/webp"],
+]);
 
 function normalizeMimeType(mimeType: string): string {
   return (mimeType.split(";")[0] ?? "").trim().toLowerCase();
@@ -227,6 +304,93 @@ async function convertAudioToWav(input: AudioTranscriptionInput): Promise<AudioT
       buffer: converted,
       mimeType: "audio/wav",
       name: `${basename(input.name, inputExt) || "voice"}.wav`,
+    };
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+async function imageContent(
+  content: Extract<MessageContent, { type: "attachment" }>,
+): Promise<ExtractedMessage> {
+  try {
+    const rawImage = {
+      buffer: await content.read(),
+      mimeType: content.mimeType,
+      name: content.name,
+    };
+    const image = await normalizeImageForManagedAgents(rawImage);
+    return {
+      text: `Image received: ${image.name}`,
+      images: [
+        {
+          data: image.buffer.toString("base64"),
+          mimeType: image.mimeType,
+          name: image.name,
+        },
+      ],
+    };
+  } catch (err) {
+    console.error("image attachment processing failed:", err);
+    return textOnly("Image received, but I couldn't process it on our side.");
+  }
+}
+
+async function normalizeImageForManagedAgents(input: {
+  buffer: Buffer;
+  mimeType: string;
+  name: string;
+}): Promise<{ buffer: Buffer; mimeType: SupportedImageMimeType; name: string }> {
+  const ext = fileExtension(input.name);
+  const mimeType = normalizeMimeType(input.mimeType);
+  if (isSupportedImageMimeType(mimeType)) {
+    return { ...input, mimeType };
+  }
+
+  const inferredMimeType = IMAGE_MIME_BY_EXTENSION.get(ext);
+  if (inferredMimeType) {
+    return { ...input, mimeType: inferredMimeType };
+  }
+
+  console.warn("converting inbound image before managed-agent handoff", {
+    name: input.name,
+    mimeType: input.mimeType,
+  });
+  return convertImageToPng(input);
+}
+
+function isSupportedImageMimeType(mimeType: string): mimeType is SupportedImageMimeType {
+  return SUPPORTED_IMAGE_MIME_TYPES.has(mimeType as SupportedImageMimeType);
+}
+
+async function convertImageToPng(input: {
+  buffer: Buffer;
+  name: string;
+  mimeType: string;
+}): Promise<{ buffer: Buffer; mimeType: "image/png"; name: string }> {
+  const dir = await mkdtemp(join(tmpdir(), "runner-image-"));
+  const inputExt = fileExtension(input.name) || ".image";
+  const inputPath = join(dir, `input${inputExt}`);
+  const outputPath = join(dir, "output.png");
+
+  try {
+    await writeFile(inputPath, input.buffer);
+    await execFileAsync(ffmpeg.path, [
+      "-y",
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-i",
+      inputPath,
+      "-frames:v",
+      "1",
+      outputPath,
+    ]);
+    const converted = await readFile(outputPath);
+    return {
+      buffer: converted,
+      mimeType: "image/png",
+      name: `${basename(input.name, inputExt) || "image"}.png`,
     };
   } finally {
     await rm(dir, { recursive: true, force: true });
