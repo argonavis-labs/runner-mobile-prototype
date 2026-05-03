@@ -216,6 +216,8 @@ const OPENAI_AUDIO_EXTENSION_BY_MIME = new Map(
   [...OPENAI_AUDIO_MIME_BY_EXTENSION].map(([ext, mimeType]) => [mimeType, ext]),
 );
 
+const MAX_MANAGED_AGENT_IMAGE_BYTES = 4_500_000;
+
 const IMAGE_FILE_EXTENSIONS = new Set([
   ".bmp",
   ".gif",
@@ -354,12 +356,12 @@ async function normalizeImageForManagedAgents(input: {
   const ext = fileExtension(input.name);
   const mimeType = normalizeMimeType(input.mimeType);
   if (isSupportedImageMimeType(mimeType)) {
-    return { ...input, mimeType };
+    return ensureImageSizeForManagedAgents({ ...input, mimeType });
   }
 
   const inferredMimeType = IMAGE_MIME_BY_EXTENSION.get(ext);
   if (inferredMimeType) {
-    return { ...input, mimeType: inferredMimeType };
+    return ensureImageSizeForManagedAgents({ ...input, mimeType: inferredMimeType });
   }
 
   console.warn("converting inbound image before managed-agent handoff", {
@@ -367,9 +369,9 @@ async function normalizeImageForManagedAgents(input: {
     mimeType: input.mimeType,
   });
   if (isHeicImage(input.name, mimeType)) {
-    return convertHeicToPng(input);
+    return convertHeicToJpeg(input);
   }
-  return convertImageToPng(input);
+  return ensureImageSizeForManagedAgents(await convertImageToPng(input));
 }
 
 function isSupportedImageMimeType(mimeType: string): mimeType is SupportedImageMimeType {
@@ -381,24 +383,33 @@ function isHeicImage(name: string, mimeType: string): boolean {
   return ext === ".heic" || ext === ".heif" || mimeType === "image/heic" || mimeType === "image/heif";
 }
 
-async function convertHeicToPng(input: {
+async function convertHeicToJpeg(input: {
   buffer: Buffer;
   name: string;
-}): Promise<{ buffer: Buffer; mimeType: "image/png"; name: string }> {
+}): Promise<{ buffer: Buffer; mimeType: "image/jpeg"; name: string }> {
   const inputExt = fileExtension(input.name);
-  const converted = await heicConvert({
-    buffer: input.buffer,
-    format: "PNG",
-  });
-  return {
-    buffer: Buffer.isBuffer(converted)
-      ? converted
-      : converted instanceof ArrayBuffer
-        ? Buffer.from(converted)
-        : Buffer.from(converted.buffer, converted.byteOffset, converted.byteLength),
-    mimeType: "image/png",
-    name: `${basename(input.name, inputExt) || "image"}.png`,
-  };
+  const name = `${basename(input.name, inputExt) || "image"}.jpg`;
+  for (const quality of [0.82, 0.65, 0.5, 0.35]) {
+    const converted = toBuffer(
+      await heicConvert({
+        buffer: input.buffer,
+        format: "JPEG",
+        quality,
+      }),
+    );
+    if (converted.length <= MAX_MANAGED_AGENT_IMAGE_BYTES) {
+      return { buffer: converted, mimeType: "image/jpeg", name };
+    }
+  }
+
+  const converted = toBuffer(
+    await heicConvert({
+      buffer: input.buffer,
+      format: "JPEG",
+      quality: 0.35,
+    }),
+  );
+  return compressImageToJpeg({ buffer: converted, name });
 }
 
 async function convertImageToPng(input: {
@@ -433,6 +444,91 @@ async function convertImageToPng(input: {
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+}
+
+async function ensureImageSizeForManagedAgents(input: {
+  buffer: Buffer;
+  mimeType: SupportedImageMimeType;
+  name: string;
+}): Promise<{ buffer: Buffer; mimeType: SupportedImageMimeType; name: string }> {
+  if (input.buffer.length <= MAX_MANAGED_AGENT_IMAGE_BYTES) return input;
+
+  console.warn("compressing inbound image before managed-agent handoff", {
+    name: input.name,
+    mimeType: input.mimeType,
+    bytes: input.buffer.length,
+  });
+  return compressImageToJpeg(input);
+}
+
+async function compressImageToJpeg(input: {
+  buffer: Buffer;
+  name: string;
+}): Promise<{ buffer: Buffer; mimeType: "image/jpeg"; name: string }> {
+  const attempts = [
+    { maxWidth: 2000, quality: 6 },
+    { maxWidth: 1600, quality: 8 },
+    { maxWidth: 1200, quality: 10 },
+    { maxWidth: 900, quality: 12 },
+  ];
+
+  let last: Buffer | null = null;
+  for (const attempt of attempts) {
+    const compressed = await ffmpegImageToJpeg(input, attempt);
+    last = compressed.buffer;
+    if (compressed.buffer.length <= MAX_MANAGED_AGENT_IMAGE_BYTES) return compressed;
+  }
+
+  if (last) {
+    return {
+      buffer: last,
+      mimeType: "image/jpeg",
+      name: `${basename(input.name, fileExtension(input.name)) || "image"}.jpg`,
+    };
+  }
+  throw new Error(`image could not be compressed under ${MAX_MANAGED_AGENT_IMAGE_BYTES} bytes`);
+}
+
+async function ffmpegImageToJpeg(
+  input: { buffer: Buffer; name: string },
+  opts: { maxWidth: number; quality: number },
+): Promise<{ buffer: Buffer; mimeType: "image/jpeg"; name: string }> {
+  const dir = await mkdtemp(join(tmpdir(), "runner-image-compress-"));
+  const inputExt = fileExtension(input.name) || ".image";
+  const inputPath = join(dir, `input${inputExt}`);
+  const outputPath = join(dir, "output.jpg");
+
+  try {
+    await writeFile(inputPath, input.buffer);
+    await execFileAsync(ffmpeg.path, [
+      "-y",
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-i",
+      inputPath,
+      "-vf",
+      `scale=${opts.maxWidth}:-2`,
+      "-frames:v",
+      "1",
+      "-q:v",
+      String(opts.quality),
+      outputPath,
+    ]);
+    return {
+      buffer: await readFile(outputPath),
+      mimeType: "image/jpeg",
+      name: `${basename(input.name, inputExt) || "image"}.jpg`,
+    };
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+function toBuffer(input: ArrayBuffer | Uint8Array | Buffer): Buffer {
+  if (Buffer.isBuffer(input)) return input;
+  if (input instanceof ArrayBuffer) return Buffer.from(input);
+  return Buffer.from(input.buffer, input.byteOffset, input.byteLength);
 }
 
 async function execFileAsync(command: string, args: string[]): Promise<void> {
