@@ -247,11 +247,18 @@ async function buildMergedEntrypoint(
   );
   const runnerIndex = localFiles.get("local/runner-memory/MEMORY.md");
   const baseContent = runnerIndex ? rewriteRunnerMemoryLinks(runnerIndex.content) : "";
+  const baseLines = new Set(
+    baseContent
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean),
+  );
   const existingLines = existing?.file.content.trim() ? existing.file.content.trim().split("\n") : [];
   const preservedLines = existingLines.filter(
     (line) =>
       line.trim().length > 0 &&
-      !line.includes("](local/runner-memory/") &&
+      line.trim() !== "## Mobile-created memories" &&
+      !baseLines.has(line.trim()) &&
       !line.includes("](local/runner-memory/MEMORY.md)"),
   );
   const preserved = preservedLines.length > 0 ? `\n\n## Mobile-created memories\n${preservedLines.join("\n")}\n` : "";
