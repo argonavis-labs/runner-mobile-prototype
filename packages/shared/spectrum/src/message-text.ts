@@ -1,9 +1,19 @@
 import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, extname, join } from "node:path";
 import ffmpeg from "@ffmpeg-installer/ffmpeg";
 import type { Message } from "spectrum-ts";
+
+type HeicConvert = (options: {
+  buffer: Buffer;
+  format: "JPEG" | "PNG";
+  quality?: number;
+}) => Promise<ArrayBuffer | Uint8Array | Buffer>;
+
+const require = createRequire(import.meta.url);
+const heicConvert = require("heic-convert") as HeicConvert;
 
 type MessageContent = Message["content"];
 type EffectContent = Extract<MessageContent, { type: "effect" }>["content"];
@@ -356,11 +366,39 @@ async function normalizeImageForManagedAgents(input: {
     name: input.name,
     mimeType: input.mimeType,
   });
+  if (isHeicImage(input.name, mimeType)) {
+    return convertHeicToPng(input);
+  }
   return convertImageToPng(input);
 }
 
 function isSupportedImageMimeType(mimeType: string): mimeType is SupportedImageMimeType {
   return SUPPORTED_IMAGE_MIME_TYPES.has(mimeType as SupportedImageMimeType);
+}
+
+function isHeicImage(name: string, mimeType: string): boolean {
+  const ext = fileExtension(name);
+  return ext === ".heic" || ext === ".heif" || mimeType === "image/heic" || mimeType === "image/heif";
+}
+
+async function convertHeicToPng(input: {
+  buffer: Buffer;
+  name: string;
+}): Promise<{ buffer: Buffer; mimeType: "image/png"; name: string }> {
+  const inputExt = fileExtension(input.name);
+  const converted = await heicConvert({
+    buffer: input.buffer,
+    format: "PNG",
+  });
+  return {
+    buffer: Buffer.isBuffer(converted)
+      ? converted
+      : converted instanceof ArrayBuffer
+        ? Buffer.from(converted)
+        : Buffer.from(converted.buffer, converted.byteOffset, converted.byteLength),
+    mimeType: "image/png",
+    name: `${basename(input.name, inputExt) || "image"}.png`,
+  };
 }
 
 async function convertImageToPng(input: {
