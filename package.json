@@ -15,6 +15,13 @@
     "dev:server": "sh -c 'set -a; [ ! -f .env ] || . ./.env; set +a; pnpm --filter @runner-mobile/server dev'",
     "dev:microsite": "pnpm --filter @runner-mobile/microsite dev",
     "cron": "sh -c 'set -a; [ ! -f .env ] || . ./.env; set +a; pnpm --filter @runner-mobile/cron start'",
+    "memory:register": "tsx scripts/memory-sync.ts register",
+    "memory:sync": "tsx scripts/memory-sync.ts sync",
+    "memory:daemon:install": "tsx scripts/memory-sync.ts daemon:install",
+    "memory:daemon:start": "tsx scripts/memory-sync.ts daemon:start",
+    "memory:daemon:stop": "tsx scripts/memory-sync.ts daemon:stop",
+    "memory:daemon:status": "tsx scripts/memory-sync.ts daemon:status",
+    "memory:daemon:uninstall": "tsx scripts/memory-sync.ts daemon:uninstall",
     "build": "node ./scripts/railway-dispatch.js build",
     "start": "node ./scripts/railway-dispatch.js start"
   },

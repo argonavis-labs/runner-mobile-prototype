@@ -139,12 +139,25 @@ export async function consumeInboundMessages(
         if (!out) throw new Error("reply returned undefined");
       };
 
-      if (!phoneNumber || (!extracted.text && extracted.images.length === 0)) {
-        console.warn("inbound skipped: missing phone or content", {
+      if (!phoneNumber) {
+        console.warn("inbound skipped: missing phone", {
           phoneNumber: phoneNumber || "<empty>",
-          hasText: extracted.text.length > 0,
+          contentType: message.content.type,
+        });
+        continue;
+      }
+
+      if (!extracted.text && extracted.images.length === 0) {
+        console.warn("inbound skipped: unsupported content", {
+          phoneNumber,
+          contentType: message.content.type,
           imageCount: extracted.images.length,
         });
+        if (message.content.type === "voice") {
+          await reply(
+            "I got your voice message, but I couldn't transcribe it. Send that as text and I'll handle it.",
+          );
+        }
         continue;
       }
 
