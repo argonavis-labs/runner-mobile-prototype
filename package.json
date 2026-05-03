@@ -15,10 +15,18 @@
     "dev:server": "pnpm --filter @runner-mobile/server dev",
     "dev:microsite": "pnpm --filter @runner-mobile/microsite dev",
     "cron": "pnpm --filter @runner-mobile/cron start",
+    "memory:register": "tsx scripts/memory-sync.ts register",
+    "memory:sync": "tsx scripts/memory-sync.ts sync",
+    "memory:daemon:install": "tsx scripts/memory-sync.ts daemon:install",
+    "memory:daemon:start": "tsx scripts/memory-sync.ts daemon:start",
+    "memory:daemon:stop": "tsx scripts/memory-sync.ts daemon:stop",
+    "memory:daemon:status": "tsx scripts/memory-sync.ts daemon:status",
+    "memory:daemon:uninstall": "tsx scripts/memory-sync.ts daemon:uninstall",
     "build": "node ./scripts/railway-dispatch.js build",
     "start": "node ./scripts/railway-dispatch.js start"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.4",
     "@types/node": "^22.10.0",
     "eslint": "^9.18.0",
     "prettier": "^3.4.2",

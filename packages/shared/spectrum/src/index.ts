@@ -89,11 +89,22 @@ export async function consumeInboundMessages(
         if (!out) throw new Error("reply returned undefined");
       };
 
-      if (!phoneNumber || !text) {
-        console.warn("inbound skipped: missing phone or text", {
+      if (!phoneNumber) {
+        console.warn("inbound skipped: missing phone", {
           phoneNumber: phoneNumber || "<empty>",
-          hasText: text.length > 0,
+          contentType: message.content.type,
         });
+        continue;
+      }
+
+      if (!text) {
+        console.warn("inbound skipped: unsupported content", {
+          phoneNumber,
+          contentType: message.content.type,
+        });
+        if (message.content.type === "voice") {
+          await reply("I got your voice message, but I can only read text messages in this prototype. Send that as text and I'll handle it.");
+        }
         continue;
       }
 

@@ -7,8 +7,9 @@
  *   - one Vault — holds static-bearer Credentials (one per MCP server URL),
  *     each with the user's Runner JWT. Credentials are reconciled before
  *     every session turn so a JWT rotation re-syncs all of them.
- *   - one Session — references the agent + vault; resumes across messages
- *     so memory persists in the harness's filesystem.
+ *   - one Session — references the agent + vault; resumes across messages.
+ *     Durable memory is stored in the prototype DB and exposed via custom
+ *     memory-file tools.
  *
  * The agent communicates with the user via the `send_imessage` custom tool;
  * the webhook/cron handler intercepts these calls and dispatches via Spectrum.
@@ -37,10 +38,22 @@ import type {
   EventSendParams,
 } from "@anthropic-ai/sdk/resources/beta/sessions/events";
 import { eq } from "drizzle-orm";
-import { db, users, type User } from "@runner-mobile/db";
+import {
+  db,
+  deleteMemoryFile,
+  editMemoryFile,
+  ensureMemoryEntrypoint,
+  ensureMemoryReplica,
+  getMemoryEntrypoint,
+  readMemoryFile,
+  searchMemoryFiles,
+  users,
+  writeMemoryFile,
+  type User,
+} from "@runner-mobile/db";
 import { mcpUrl, type CatalogItem } from "@runner-mobile/runner-api";
 
-const SYSTEM_PROMPT = `You're Runner — your user's tool, not a chatbot. You reach them over iMessage and have full access to the apps they've connected (email, calendar, docs, tickets, CRMs, whatever's there), plus web search, fetch, and a persistent filesystem for memory.
+const BASE_SYSTEM_PROMPT = `You're Runner — your user's tool, not a chatbot. You reach them over iMessage and have full access to the apps they've connected (email, calendar, docs, tickets, CRMs, whatever's there), plus web search, fetch, and a cloud-backed personal memory directory.
 
 Be aggressively helpful. A tool earns its keep by doing things, not by offering to.
 
@@ -49,7 +62,7 @@ Defaults:
 - One hard limit: don't contact other people. Anything that sends, replies, comments, posts, schedules with others, or otherwise lands in someone else's notifications needs explicit user approval. Draft it in full, show the user, wait for the go-ahead. The user is the only person you act for; everyone else gets a draft.
 - Investigate before you answer. When the user mentions a person, project, or thread, look it up in their connected apps first. Bring receipts.
 - Proactive on heartbeats. When you receive [heartbeat tick], mine the user's connected apps for things worth surfacing: unanswered important emails, calendar conflicts, PRs/tickets waiting on them, deadlines slipping, follow-ups they promised. If you find something useful, text. Stay silent only when there's genuinely nothing.
-- Remember everything. Use the filesystem to persist user preferences, ongoing threads, names, projects, recurring tasks. Carry context across messages.
+- Remember durable context freely. Use the memory file tools to persist user preferences, ongoing work context, reference pointers, and feedback that should carry across desktop and mobile.
 
 iMessage style:
 - Short bubbles. Multiple short messages beat a wall of text.
@@ -57,6 +70,55 @@ iMessage style:
 - Lead with the answer or the action. Skip preambles.
 
 ALWAYS communicate via the send_imessage tool — never reply with plain text. Tool calls are cheap; use them liberally before responding.`;
+
+function memoryPrompt(memoryIndex: string): string {
+  const index = memoryIndex.trim()
+    ? memoryIndex.trim()
+    : "Your MEMORY.md is currently empty. When you save new memories, they will appear here.";
+
+  return `# Persistent Personal Memory
+
+You have a cloud-backed, file-based memory directory named \`runner-mobile-cloud/\`.
+
+\`MEMORY.md\` is the entrypoint and index. It is loaded into your context below. It is not where memory bodies live. Each entry should be one concise line: \`- [Title](file.md) — one-line hook\`.
+
+To recall memory:
+1. Start from \`MEMORY.md\`.
+2. Read specific topic files with \`read_memory_file\` when an index entry looks relevant.
+3. Use \`search_memory_files\` when the index is insufficient.
+4. Treat memory as context, not truth. Verify current files, apps, or resources before acting on drift-prone claims.
+
+To save memory:
+1. Check \`MEMORY.md\` and existing topic files first to avoid duplicates.
+2. Write or update one markdown topic file with frontmatter:
+\`\`\`markdown
+---
+name: {{memory name}}
+description: {{one-line description used to decide relevance later}}
+type: {{user, feedback, project, reference}}
+---
+
+{{memory body}}
+\`\`\`
+3. Add or update one concise pointer in \`MEMORY.md\`.
+4. Keep \`MEMORY.md\` short; move detail into topic files.
+
+Save user memories for durable facts about the user's role, goals, responsibilities, and preferences. Save feedback memories for corrections or validated ways the user wants you to work. Save project memories for non-derivable context about current work, decisions, deadlines, or incidents. Save reference memories for where to find external information.
+
+## MEMORY.md
+
+${index}`;
+}
+
+async function buildSystemPrompt(user: User): Promise<string> {
+  const replicaId = await ensureMemoryReplica({
+    runnerUserId: user.runnerUserId,
+    workspaceId: user.workspaceId,
+  });
+  await ensureMemoryEntrypoint(replicaId);
+  const index = await getMemoryEntrypoint(replicaId);
+  return `${BASE_SYSTEM_PROMPT}\n\n${memoryPrompt(index)}`;
+}
 
 // Sonnet 4.6 — cost/speed step down from Opus 4.7. Managed Agents'
 // model config only exposes `id` and `speed: standard|fast`; there is no
@@ -134,6 +196,77 @@ const SEND_IMESSAGE_TOOL: BetaManagedAgentsCustomToolParams = {
   },
 };
 
+const READ_MEMORY_FILE_TOOL: BetaManagedAgentsCustomToolParams = {
+  type: "custom",
+  name: "read_memory_file",
+  description: "Read a markdown file from the user's cloud-backed memory directory.",
+  input_schema: {
+    type: "object",
+    properties: {
+      path: { type: "string", description: "Relative path such as MEMORY.md or topic.md" },
+    },
+    required: ["path"],
+  },
+};
+
+const WRITE_MEMORY_FILE_TOOL: BetaManagedAgentsCustomToolParams = {
+  type: "custom",
+  name: "write_memory_file",
+  description:
+    "Create or replace a markdown file in the user's memory directory. Use for topic files and MEMORY.md index updates.",
+  input_schema: {
+    type: "object",
+    properties: {
+      path: { type: "string", description: "Relative markdown path" },
+      content: { type: "string", description: "Full markdown file content" },
+    },
+    required: ["path", "content"],
+  },
+};
+
+const EDIT_MEMORY_FILE_TOOL: BetaManagedAgentsCustomToolParams = {
+  type: "custom",
+  name: "edit_memory_file",
+  description: "Replace exact text inside an existing memory file.",
+  input_schema: {
+    type: "object",
+    properties: {
+      path: { type: "string", description: "Relative markdown path" },
+      old_text: { type: "string", description: "Exact text to replace" },
+      new_text: { type: "string", description: "Replacement text" },
+    },
+    required: ["path", "old_text", "new_text"],
+  },
+};
+
+const DELETE_MEMORY_FILE_TOOL: BetaManagedAgentsCustomToolParams = {
+  type: "custom",
+  name: "delete_memory_file",
+  description: "Delete an outdated memory file from the user's memory directory.",
+  input_schema: {
+    type: "object",
+    properties: {
+      path: { type: "string", description: "Relative markdown path" },
+    },
+    required: ["path"],
+  },
+};
+
+const SEARCH_MEMORY_FILES_TOOL: BetaManagedAgentsCustomToolParams = {
+  type: "custom",
+  name: "search_memory_files",
+  description:
+    "Search memory topic files by path, frontmatter, and body text. Use when MEMORY.md is not enough.",
+  input_schema: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "Search query" },
+      limit: { type: "number", description: "Maximum results, default 10" },
+    },
+    required: ["query"],
+  },
+};
+
 /**
  * Create or update the user's Managed Agent so its MCP servers reflect the
  * current catalog. Backend is no-op if nothing changed; we still bump the
@@ -159,8 +292,14 @@ const AGENT_TOOLSET: BetaManagedAgentsAgentToolset20260401Params = {
   default_config: ALWAYS_ALLOW,
 };
 
-export async function ensureAgent(user: User, catalog: CatalogItem[]): Promise<string> {
+type EnsureAgentResult = {
+  agentId: string;
+  changed: boolean;
+};
+
+export async function ensureAgent(user: User, catalog: CatalogItem[]): Promise<EnsureAgentResult> {
   const c = client();
+  const system = await buildSystemPrompt(user);
   const mcpServers: BetaManagedAgentsURLMCPServerParams[] = buildMcpServers(
     catalog,
     user.workspaceId,
@@ -170,7 +309,16 @@ export async function ensureAgent(user: User, catalog: CatalogItem[]): Promise<s
     mcp_server_name: s.name,
     default_config: ALWAYS_ALLOW,
   }));
-  const tools = [SEND_IMESSAGE_TOOL, AGENT_TOOLSET, ...mcpToolsets];
+  const tools = [
+    SEND_IMESSAGE_TOOL,
+    READ_MEMORY_FILE_TOOL,
+    WRITE_MEMORY_FILE_TOOL,
+    EDIT_MEMORY_FILE_TOOL,
+    DELETE_MEMORY_FILE_TOOL,
+    SEARCH_MEMORY_FILES_TOOL,
+    AGENT_TOOLSET,
+    ...mcpToolsets,
+  ];
 
   if (user.managedAgentId && user.managedAgentVersion != null) {
     const params: AgentUpdateParams = {
@@ -178,7 +326,7 @@ export async function ensureAgent(user: User, catalog: CatalogItem[]): Promise<s
       // Pass model on update so existing agents pick up model changes
       // (otherwise update preserves whatever model was set at create time).
       model: MODEL,
-      system: SYSTEM_PROMPT,
+      system,
       tools,
       mcp_servers: mcpServers,
     };
@@ -186,16 +334,16 @@ export async function ensureAgent(user: User, catalog: CatalogItem[]): Promise<s
     if (updated.version !== user.managedAgentVersion) {
       await db
         .update(users)
-        .set({ managedAgentVersion: updated.version })
+        .set({ managedAgentVersion: updated.version, managedAgentsSessionId: null })
         .where(eq(users.phoneNumber, user.phoneNumber));
     }
-    return user.managedAgentId;
+    return { agentId: user.managedAgentId, changed: updated.version !== user.managedAgentVersion };
   }
 
   const createParams: AgentCreateParams = {
     name: `runner-mobile-${user.runnerUserId}`,
     model: MODEL,
-    system: SYSTEM_PROMPT,
+    system,
     tools,
     mcp_servers: mcpServers,
   };
@@ -206,7 +354,7 @@ export async function ensureAgent(user: User, catalog: CatalogItem[]): Promise<s
     .set({ managedAgentId: agent.id, managedAgentVersion: agent.version })
     .where(eq(users.phoneNumber, user.phoneNumber));
 
-  return agent.id;
+  return { agentId: agent.id, changed: true };
 }
 
 /**
@@ -273,11 +421,7 @@ export async function ensureVaultAndCredentials(
  * Get the user's session, creating one if needed. Persists the new id back
  * to the users row.
  */
-export async function ensureSession(
-  user: User,
-  agentId: string,
-  vaultId: string,
-): Promise<string> {
+export async function ensureSession(user: User, agentId: string, vaultId: string): Promise<string> {
   if (user.managedAgentsSessionId) return user.managedAgentsSessionId;
 
   const environmentId = await getEnvironmentId();
@@ -295,6 +439,16 @@ export async function ensureSession(
   return session.id;
 }
 
+export async function createSession(agentId: string, vaultId: string): Promise<string> {
+  const environmentId = await getEnvironmentId();
+  const session = await client().beta.sessions.create({
+    agent: agentId,
+    environment_id: environmentId,
+    vault_ids: [vaultId],
+  });
+  return session.id;
+}
+
 /**
  * Run one turn: open stream, send user message, drain events, intercept
  * `send_imessage` tool calls and dispatch via the provided callback.
@@ -302,11 +456,17 @@ export async function ensureSession(
  * Returns true if the agent sent at least one iMessage during the turn.
  */
 export async function runTurn(opts: {
+  user: User;
   sessionId: string;
   userMessage: string;
   onSendIMessage: (text: string) => Promise<void>;
 }): Promise<boolean> {
   const c = client();
+  const memoryReplicaId = await ensureMemoryReplica({
+    runnerUserId: opts.user.runnerUserId,
+    workspaceId: opts.user.workspaceId,
+  });
+  await ensureMemoryEntrypoint(memoryReplicaId);
   const stream = await c.beta.sessions.events.stream(opts.sessionId);
 
   const userMessageEvents: EventSendParams = {
@@ -360,6 +520,16 @@ export async function runTurn(opts: {
             } else {
               resultText = "error: missing or empty message";
             }
+          } else if (tu.name === "read_memory_file") {
+            resultText = await handleReadMemoryFile(memoryReplicaId, tu.input);
+          } else if (tu.name === "write_memory_file") {
+            resultText = await handleWriteMemoryFile(memoryReplicaId, tu.input);
+          } else if (tu.name === "edit_memory_file") {
+            resultText = await handleEditMemoryFile(memoryReplicaId, tu.input);
+          } else if (tu.name === "delete_memory_file") {
+            resultText = await handleDeleteMemoryFile(memoryReplicaId, tu.input);
+          } else if (tu.name === "search_memory_files") {
+            resultText = await handleSearchMemoryFiles(memoryReplicaId, tu.input);
           } else {
             resultText = `error: unknown tool ${tu.name}`;
           }
@@ -393,6 +563,111 @@ export async function runTurn(opts: {
   return sentAnyImessage;
 }
 
+function inputObject(input: unknown): Record<string, unknown> {
+  return typeof input === "object" && input !== null ? (input as Record<string, unknown>) : {};
+}
+
+async function handleReadMemoryFile(replicaId: number, input: unknown): Promise<string> {
+  try {
+    const path = inputObject(input).path;
+    if (typeof path !== "string") return "error: path is required";
+    const file = await readMemoryFile(replicaId, path);
+    if (!file) return `error: memory file not found: ${path}`;
+    return JSON.stringify({
+      path: file.path,
+      revision: file.revision,
+      updatedAt: file.updatedAt.toISOString(),
+      content: file.content,
+    });
+  } catch (err) {
+    return `error: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+async function handleWriteMemoryFile(replicaId: number, input: unknown): Promise<string> {
+  try {
+    const obj = inputObject(input);
+    if (typeof obj.path !== "string") return "error: path is required";
+    if (typeof obj.content !== "string") return "error: content is required";
+    const file = await writeMemoryFile({
+      replicaId,
+      path: obj.path,
+      content: obj.content,
+      origin: "mobile",
+    });
+    return JSON.stringify({
+      status: "written",
+      path: file.path,
+      revision: file.revision,
+      updatedAt: file.updatedAt.toISOString(),
+    });
+  } catch (err) {
+    return `error: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+async function handleEditMemoryFile(replicaId: number, input: unknown): Promise<string> {
+  try {
+    const obj = inputObject(input);
+    if (typeof obj.path !== "string") return "error: path is required";
+    if (typeof obj.old_text !== "string") return "error: old_text is required";
+    if (typeof obj.new_text !== "string") return "error: new_text is required";
+    const file = await editMemoryFile({
+      replicaId,
+      path: obj.path,
+      oldText: obj.old_text,
+      newText: obj.new_text,
+      origin: "mobile",
+    });
+    return JSON.stringify({
+      status: "edited",
+      path: file.path,
+      revision: file.revision,
+      updatedAt: file.updatedAt.toISOString(),
+    });
+  } catch (err) {
+    return `error: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+async function handleDeleteMemoryFile(replicaId: number, input: unknown): Promise<string> {
+  try {
+    const path = inputObject(input).path;
+    if (typeof path !== "string") return "error: path is required";
+    const file = await deleteMemoryFile({ replicaId, path, origin: "mobile" });
+    return JSON.stringify({
+      status: "deleted",
+      path: file.path,
+      revision: file.revision,
+      updatedAt: file.updatedAt.toISOString(),
+    });
+  } catch (err) {
+    return `error: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+async function handleSearchMemoryFiles(replicaId: number, input: unknown): Promise<string> {
+  try {
+    const obj = inputObject(input);
+    if (typeof obj.query !== "string") return "error: query is required";
+    const limit = typeof obj.limit === "number" ? obj.limit : undefined;
+    const files = await searchMemoryFiles({ replicaId, query: obj.query, limit });
+    return JSON.stringify({
+      results: files.map((file) => ({
+        path: file.path,
+        revision: file.revision,
+        updatedAt: file.updatedAt.toISOString(),
+        content:
+          file.content.length > 4000
+            ? `${file.content.slice(0, 4000)}\n\n[truncated]`
+            : file.content,
+      })),
+    });
+  } catch (err) {
+    return `error: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
 /**
  * Convenience: ensure agent + vault + session exist for the user, then run
  * one turn. Pass the latest catalog so the agent's MCP servers and vault
@@ -404,10 +679,18 @@ export async function resumeOrSpawnAndRun(opts: {
   userMessage: string;
   onSendIMessage: (text: string) => Promise<void>;
 }): Promise<boolean> {
-  const agentId = await ensureAgent(opts.user, opts.catalog);
+  const { agentId, changed } = await ensureAgent(opts.user, opts.catalog);
   const vaultId = await ensureVaultAndCredentials(opts.user, opts.catalog);
-  const sessionId = await ensureSession(opts.user, agentId, vaultId);
+  let sessionId = opts.user.managedAgentsSessionId;
+  if (changed || !sessionId) {
+    sessionId = await createSession(agentId, vaultId);
+    await db
+      .update(users)
+      .set({ managedAgentsSessionId: sessionId })
+      .where(eq(users.phoneNumber, opts.user.phoneNumber));
+  }
   return runTurn({
+    user: opts.user,
     sessionId,
     userMessage: opts.userMessage,
     onSendIMessage: opts.onSendIMessage,

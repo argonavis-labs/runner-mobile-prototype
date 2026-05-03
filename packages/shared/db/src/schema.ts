@@ -1,4 +1,4 @@
-import { integer, pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import { integer, pgTable, serial, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 
 export const users = pgTable("users", {
   phoneNumber: text("phone_number").primaryKey(),
@@ -20,3 +20,78 @@ export const users = pgTable("users", {
 
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
+
+export const memoryReplicas = pgTable(
+  "memory_replicas",
+  {
+    id: serial("id").primaryKey(),
+    runnerUserId: text("runner_user_id").notNull(),
+    workspaceId: text("workspace_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    runnerWorkspaceIdx: uniqueIndex("memory_replicas_runner_workspace_idx").on(
+      table.runnerUserId,
+      table.workspaceId,
+    ),
+  }),
+);
+
+export const memoryFiles = pgTable(
+  "memory_files",
+  {
+    id: serial("id").primaryKey(),
+    replicaId: integer("replica_id")
+      .notNull()
+      .references(() => memoryReplicas.id, { onDelete: "cascade" }),
+    path: text("path").notNull(),
+    content: text("content").notNull().default(""),
+    contentHash: text("content_hash").notNull(),
+    revision: integer("revision").notNull().default(0),
+    origin: text("origin").notNull(),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    replicaPathIdx: uniqueIndex("memory_files_replica_path_idx").on(table.replicaId, table.path),
+  }),
+);
+
+export const memoryFileRevisions = pgTable("memory_file_revisions", {
+  id: serial("id").primaryKey(),
+  replicaId: integer("replica_id")
+    .notNull()
+    .references(() => memoryReplicas.id, { onDelete: "cascade" }),
+  path: text("path").notNull(),
+  content: text("content").notNull().default(""),
+  contentHash: text("content_hash").notNull(),
+  fileRevision: integer("file_revision").notNull(),
+  origin: text("origin").notNull(),
+  operation: text("operation").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const memorySyncClients = pgTable(
+  "memory_sync_clients",
+  {
+    id: text("id").primaryKey(),
+    replicaId: integer("replica_id")
+      .notNull()
+      .references(() => memoryReplicas.id, { onDelete: "cascade" }),
+    label: text("label").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    tokenHashIdx: uniqueIndex("memory_sync_clients_token_hash_idx").on(table.tokenHash),
+  }),
+);
+
+export type MemoryReplica = typeof memoryReplicas.$inferSelect;
+export type MemoryFile = typeof memoryFiles.$inferSelect;
+export type MemoryFileRevision = typeof memoryFileRevisions.$inferSelect;
+export type MemorySyncClient = typeof memorySyncClients.$inferSelect;
