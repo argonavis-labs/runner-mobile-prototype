@@ -4,7 +4,7 @@
  */
 
 const RUNNER_BACKEND = import.meta.env.VITE_RUNNER_BACKEND ?? "https://api.runner.now";
-const SERVER_URL = import.meta.env.VITE_SERVER_URL ?? "http://localhost:3001";
+const SERVER_URL = import.meta.env.VITE_SERVER_URL ?? "http://localhost:4001";
 
 export type MagicAuthVerifyResponse = {
   access_token: string;

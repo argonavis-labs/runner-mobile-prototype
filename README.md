@@ -25,8 +25,7 @@ docker compose up -d postgres
 cp .env.example .env       # fill in real values
 pnpm install
 pnpm db:migrate
-pnpm dev:server            # :3001
-pnpm dev:microsite         # :5173
+pnpm dev                   # both server (:4001) + microsite (:4173)
 ```
 
 For end-to-end testing, expose the server via ngrok / Cloudflare tunnel so Spectrum's cloud can reach it.

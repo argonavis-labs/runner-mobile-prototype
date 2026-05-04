@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-const DEFAULT_SERVER_URL = "http://localhost:3001";
+const DEFAULT_SERVER_URL = "http://localhost:4001";
 const STATE_DIR = join(homedir(), ".runner-mobile-memory-sync");
 const STATE_PATH = join(STATE_DIR, "state.json");
 const PULL_TARGET = join(homedir(), ".codex", "imported_memories", "runner-mobile-cloud");
