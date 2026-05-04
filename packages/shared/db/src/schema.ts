@@ -1,4 +1,4 @@
-import { integer, pgTable, serial, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { integer, jsonb, pgTable, serial, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 
 export const users = pgTable("users", {
   phoneNumber: text("phone_number").primaryKey(),
@@ -9,6 +9,7 @@ export const users = pgTable("users", {
   jwtExpiresAt: timestamp("jwt_expires_at", { withTimezone: true }).notNull(),
   spectrumUserId: text("spectrum_user_id").notNull(),
   assignedPhoneNumber: text("assigned_phone_number"),
+  email: text("email"),
   timeZone: text("time_zone"),
   managedAgentId: text("managed_agent_id"),
   managedAgentVersion: integer("managed_agent_version"),
@@ -55,6 +56,7 @@ export const memoryFiles = pgTable(
     revision: integer("revision").notNull().default(0),
     origin: text("origin").notNull(),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    taskMeta: jsonb("task_meta"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -74,6 +76,8 @@ export const memoryFileRevisions = pgTable("memory_file_revisions", {
   fileRevision: integer("file_revision").notNull(),
   origin: text("origin").notNull(),
   operation: text("operation").notNull(),
+  parentRevisionId: integer("parent_revision_id"),
+  mergeParentId: integer("merge_parent_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -99,3 +103,20 @@ export type MemoryReplica = typeof memoryReplicas.$inferSelect;
 export type MemoryFile = typeof memoryFiles.$inferSelect;
 export type MemoryFileRevision = typeof memoryFileRevisions.$inferSelect;
 export type MemorySyncClient = typeof memorySyncClients.$inferSelect;
+
+export const phoneLinkCodes = pgTable("phone_link_codes", {
+  code: text("code").primaryKey(),
+  runnerUserId: text("runner_user_id").notNull(),
+  workspaceId: text("workspace_id").notNull(),
+  email: text("email").notNull(),
+  jwt: text("jwt").notNull(),
+  refreshToken: text("refresh_token").notNull(),
+  jwtExpiresAt: timestamp("jwt_expires_at", { withTimezone: true }).notNull(),
+  timeZone: text("time_zone"),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  consumedAt: timestamp("consumed_at", { withTimezone: true }),
+  consumedPhone: text("consumed_phone"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type PhoneLinkCode = typeof phoneLinkCodes.$inferSelect;

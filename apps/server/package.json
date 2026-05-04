@@ -14,6 +14,7 @@
     "@runner-mobile/managed-agents": "workspace:*",
     "@runner-mobile/runner-api": "workspace:*",
     "@runner-mobile/spectrum": "workspace:*",
+    "@runner-mobile/tasks": "workspace:*",
     "cors": "^2.8.5",
     "drizzle-orm": "^0.38.3",
     "express": "^4.21.2",

@@ -1,17 +1,36 @@
+/**
+ * Bidirectional memory sync daemon.
+ *
+ * V2 protocol (PROTOCOL_VERSION = 2):
+ *   - Single canonical directory: ~/.runner/memory/
+ *   - Per-file state: { localHash, lastSyncedRevisionId }
+ *   - Push protocol sends base_revision_id; server runs three-way merge on
+ *     conflict and returns the merged content for the daemon to write back.
+ *
+ * V1 daemons (which used a separate ~/.codex/imported_memories mirror)
+ * remain readable but the V2 daemon uses an entirely different state file
+ * to avoid corrupting V1 installs in place.
+ */
+
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, readdir, writeFile, rm } from "node:fs/promises";
-import { homedir } from "node:os";
+import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
+const PROTOCOL_VERSION = 2;
 const DEFAULT_SERVER_URL = "http://localhost:4001";
-const STATE_DIR = join(homedir(), ".runner-mobile-memory-sync");
-const STATE_PATH = join(STATE_DIR, "state.json");
-const PULL_TARGET = join(homedir(), ".codex", "imported_memories", "runner-mobile-cloud");
+// Env overrides exist primarily for the e2e test harness; production
+// installs leave them unset.
+const STATE_DIR =
+  process.env.RUNNER_MOBILE_STATE_DIR ?? join(homedir(), ".runner-mobile-memory-sync");
+const STATE_PATH = join(STATE_DIR, "state-v2.json");
+const MEMORY_ROOT =
+  process.env.RUNNER_MOBILE_MEMORY_ROOT ?? join(homedir(), ".runner", "memory");
 const PLIST_PATH = join(
   homedir(),
   "Library",
@@ -19,28 +38,40 @@ const PLIST_PATH = join(
   "com.runner.mobile.memory-sync.plist",
 );
 
+type FileState = {
+  localHash: string;
+  lastSyncedRevisionId: number | null;
+};
+
 type State = {
+  protocolVersion: number;
   serverUrl: string;
   token?: string;
   replicaId?: number;
   pullCursor: number;
-  pushed: Record<string, string>;
+  files: Record<string, FileState>;
 };
 
 type LocalFile = {
-  path: string;
+  path: string; // relative to MEMORY_ROOT, posix-style
+  absolutePath: string;
   content: string;
   hash: string;
 };
 
-type RemoteFile = {
+type PushOutcome = {
   path: string;
-  content: string;
-  contentHash: string;
-  revision: number;
-  origin: string;
-  deletedAt: string | null;
-  updatedAt: string;
+  outcome: "create" | "fast_forward" | "merged" | "noop";
+  file: { revision: number; content: string; contentHash: string };
+  latestRevisionRowId: number;
+  hadBodyConflict?: boolean;
+  hadFrontmatterConflict?: boolean;
+  notes?: string[];
+};
+
+type PushResponse = {
+  changed: PushOutcome[];
+  latestRevisionId: number;
 };
 
 type RemoteRevision = {
@@ -54,14 +85,10 @@ type RemoteRevision = {
   createdAt: string;
 };
 
-const SOURCES = [
-  {
-    key: "runner-memory",
-    label: "Runner memory",
-    dir: join(homedir(), ".runner", "memory"),
-    hook: "synced Runner memory directory",
-  },
-] as const;
+type PullResponse = {
+  revisions: RemoteRevision[];
+  latestRevisionId: number;
+};
 
 async function main() {
   const [command = "sync", ...args] = process.argv.slice(2);
@@ -96,19 +123,29 @@ async function loadState(): Promise<State> {
   try {
     const raw = await readFile(STATE_PATH, "utf8");
     const parsed = JSON.parse(raw) as Partial<State>;
+    if (parsed.protocolVersion && parsed.protocolVersion !== PROTOCOL_VERSION) {
+      throw new Error(
+        `state file is at protocol v${parsed.protocolVersion}; this daemon speaks v${PROTOCOL_VERSION}. ` +
+          `Run \`pnpm memory:daemon:install\` to upgrade.`,
+      );
+    }
     return {
-      serverUrl: parsed.serverUrl ?? process.env.RUNNER_MOBILE_SERVER_URL ?? DEFAULT_SERVER_URL,
+      protocolVersion: PROTOCOL_VERSION,
+      serverUrl:
+        parsed.serverUrl ?? process.env.RUNNER_MOBILE_SERVER_URL ?? DEFAULT_SERVER_URL,
       token: process.env.RUNNER_MOBILE_SYNC_TOKEN ?? parsed.token,
       replicaId: parsed.replicaId,
       pullCursor: parsed.pullCursor ?? 0,
-      pushed: parsed.pushed ?? {},
+      files: parsed.files ?? {},
     };
-  } catch {
+  } catch (err: unknown) {
+    if (err instanceof Error && err.message.includes("protocol")) throw err;
     return {
+      protocolVersion: PROTOCOL_VERSION,
       serverUrl: process.env.RUNNER_MOBILE_SERVER_URL ?? DEFAULT_SERVER_URL,
       token: process.env.RUNNER_MOBILE_SYNC_TOKEN,
       pullCursor: 0,
-      pushed: {},
+      files: {},
     };
   }
 }
@@ -126,11 +163,13 @@ function argValue(args: string[], name: string): string | undefined {
 async function register(args: string[]) {
   const state = await loadState();
   const serverUrl = argValue(args, "--server-url") ?? state.serverUrl;
-  const accessToken = argValue(args, "--access-token") ?? process.env.RUNNER_MOBILE_ACCESS_TOKEN;
+  const accessToken =
+    argValue(args, "--access-token") ?? process.env.RUNNER_MOBILE_ACCESS_TOKEN;
   const runnerUserId =
     argValue(args, "--runner-user-id") ?? process.env.RUNNER_MOBILE_RUNNER_USER_ID;
   const workspaceId = argValue(args, "--workspace-id") ?? process.env.RUNNER_MOBILE_WORKSPACE_ID;
-  const label = argValue(args, "--label") ?? `${process.env.USER ?? "mac"}@${hostnameFallback()}`;
+  const label =
+    argValue(args, "--label") ?? `${process.env.USER ?? "mac"}@${hostnameFallback()}`;
 
   if (!accessToken || !runnerUserId || !workspaceId) {
     throw new Error(
@@ -152,12 +191,12 @@ async function register(args: string[]) {
   const body = (await res.json()) as { token: string; replicaId: number };
   const sameReplica = state.serverUrl === serverUrl && state.replicaId === body.replicaId;
   await saveState({
-    ...state,
+    protocolVersion: PROTOCOL_VERSION,
     serverUrl,
     token: body.token,
     replicaId: body.replicaId,
     pullCursor: sameReplica ? state.pullCursor : 0,
-    pushed: sameReplica ? state.pushed : {},
+    files: sameReplica ? state.files : {},
   });
   console.log(`registered memory sync client for replica ${body.replicaId}`);
 }
@@ -169,57 +208,127 @@ async function sync() {
       "not registered; run pnpm memory:register first or set RUNNER_MOBILE_SYNC_TOKEN",
     );
   }
-  const pullSince = state.pullCursor;
+  await mkdir(MEMORY_ROOT, { recursive: true });
 
   const localFiles = await collectLocalFiles();
-  const index = await buildMergedEntrypoint(state, localFiles);
-  localFiles.set("MEMORY.md", {
-    path: "MEMORY.md",
-    content: index.content,
-    hash: index.hash,
-  });
-  if (!index.changedRemote) {
-    state.pushed["MEMORY.md"] = index.hash;
+
+  // Detect locally-deleted paths up front: in state but missing on disk.
+  // We exclude these from pull application so a concurrent server update
+  // doesn't silently resurrect a file the user just deleted.
+  const locallyDeleted = new Set<string>();
+  for (const knownPath of Object.keys(state.files)) {
+    if (!localFiles.has(knownPath)) locallyDeleted.add(knownPath);
   }
 
-  const changed = [...localFiles.values()].filter((file) => state.pushed[file.path] !== file.hash);
-  if (changed.length > 0) {
-    await api<{ latestRevisionId: number }>(state, "/api/memory/sync/push", {
+  // Step 1 — Pull first so subsequent push knows the right base.
+  const pullSince = state.pullCursor;
+  const pulled = await api<PullResponse>(state, `/api/memory/sync/pull?since=${pullSince}`);
+  await applyPulledRevisions(state, pulled.revisions, localFiles, locallyDeleted);
+  state.pullCursor = Math.max(state.pullCursor, pulled.latestRevisionId);
+
+  // Re-collect after pulls may have written/deleted files.
+  const refreshedLocal = await collectLocalFiles();
+
+  // Step 2 — Push changed local files. base_revision_id is whatever we last
+  // synced for that path; the server will fast-forward or three-way merge.
+  const toPush: Array<{
+    path: string;
+    content?: string;
+    deleted?: boolean;
+    base_revision_id: number | null;
+  }> = [];
+
+  // Detect creates and edits
+  for (const file of refreshedLocal.values()) {
+    const entry = state.files[file.path];
+    if (!entry) {
+      toPush.push({ path: file.path, content: file.content, base_revision_id: null });
+    } else if (entry.localHash !== file.hash) {
+      toPush.push({
+        path: file.path,
+        content: file.content,
+        base_revision_id: entry.lastSyncedRevisionId,
+      });
+    }
+  }
+
+  // Detect deletes (in state, gone from disk)
+  for (const knownPath of Object.keys(state.files)) {
+    if (!refreshedLocal.has(knownPath)) {
+      toPush.push({
+        path: knownPath,
+        deleted: true,
+        base_revision_id: state.files[knownPath]?.lastSyncedRevisionId ?? null,
+      });
+    }
+  }
+
+  if (toPush.length > 0) {
+    const result = await api<PushResponse>(state, "/api/memory/sync/push", {
       method: "POST",
-      body: JSON.stringify({
-        files: changed.map((file) => ({ path: file.path, content: file.content })),
-      }),
+      body: JSON.stringify({ files: toPush, protocol_version: PROTOCOL_VERSION }),
     });
-    for (const file of changed) state.pushed[file.path] = file.hash;
-    console.log(`pushed ${changed.length} memory file(s)`);
+    for (const change of result.changed) {
+      if (change.outcome === "merged") {
+        // Server merged; write the merged content back to local so disk
+        // matches the new head.
+        const absolute = join(MEMORY_ROOT, change.path);
+        await atomicWrite(absolute, change.file.content);
+        state.files[change.path] = {
+          localHash: change.file.contentHash,
+          lastSyncedRevisionId: change.latestRevisionRowId,
+        };
+        console.log(
+          `merged ${change.path}${change.hadBodyConflict ? " (body conflict)" : ""}`,
+        );
+      } else if (change.outcome === "fast_forward" || change.outcome === "create") {
+        const expected = change.file.content;
+        state.files[change.path] = {
+          localHash: change.file.contentHash,
+          lastSyncedRevisionId: change.latestRevisionRowId,
+        };
+        // Reflect the canonical content (server might have normalized).
+        if (existsSync(join(MEMORY_ROOT, change.path)) && change.outcome !== "create") {
+          // Only rewrite if content differs to avoid touching mtime.
+          const current = await readFile(join(MEMORY_ROOT, change.path), "utf8").catch(
+            () => "",
+          );
+          if (current !== expected) {
+            await atomicWrite(join(MEMORY_ROOT, change.path), expected);
+          }
+        }
+      } else if (change.outcome === "noop") {
+        // Already in sync; just record state so we stop trying.
+        state.files[change.path] = {
+          localHash: change.file.contentHash,
+          lastSyncedRevisionId: change.latestRevisionRowId,
+        };
+      }
+    }
+
+    // Drop deleted entries from state once server confirms.
+    for (const change of result.changed) {
+      const stillOnDisk = refreshedLocal.has(change.path);
+      if (!stillOnDisk && toPush.some((p) => p.path === change.path && p.deleted)) {
+        delete state.files[change.path];
+      }
+    }
+    console.log(`pushed ${result.changed.length} memory file(s)`);
   } else {
     console.log("no local memory changes to push");
   }
 
-  const pulled = await api<{ revisions: RemoteRevision[]; latestRevisionId: number }>(
-    state,
-    `/api/memory/sync/pull?since=${pullSince}`,
-  );
-  const mobileRevisions = pulled.revisions.filter((rev) => rev.origin !== "local");
-  await applyPulledRevisions(mobileRevisions);
-  state.pullCursor = Math.max(state.pullCursor, pulled.latestRevisionId);
   await saveState(state);
-  console.log(`pulled ${mobileRevisions.length} mobile/cloud revision(s)`);
 }
 
 async function collectLocalFiles(): Promise<Map<string, LocalFile>> {
   const files = new Map<string, LocalFile>();
-  for (const source of SOURCES) {
-    if (!existsSync(source.dir)) continue;
-    const sourceFiles = await walkMarkdown(source.dir);
-    for (const absolutePath of sourceFiles) {
-      if (absolutePath.startsWith(PULL_TARGET)) continue;
-      const rel = relative(source.dir, absolutePath).replaceAll("\\", "/");
-      if (rel.split("/").includes("runner-mobile-cloud")) continue;
-      const path = `local/${source.key}/${rel}`;
-      const content = await readFile(absolutePath, "utf8");
-      files.set(path, { path, content, hash: sha256(content) });
-    }
+  if (!existsSync(MEMORY_ROOT)) return files;
+  const absolutes = await walkMarkdown(MEMORY_ROOT);
+  for (const absolutePath of absolutes) {
+    const path = relative(MEMORY_ROOT, absolutePath).replaceAll("\\", "/");
+    const content = await readFile(absolutePath, "utf8");
+    files.set(path, { path, absolutePath, content, hash: sha256(content) });
   }
   return files;
 }
@@ -228,6 +337,7 @@ async function walkMarkdown(dir: string): Promise<string[]> {
   const out: string[] = [];
   const entries = await readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
+    if (entry.name.startsWith(".")) continue;
     const path = join(dir, entry.name);
     if (entry.isDirectory()) {
       out.push(...(await walkMarkdown(path)));
@@ -238,59 +348,75 @@ async function walkMarkdown(dir: string): Promise<string[]> {
   return out;
 }
 
-async function buildMergedEntrypoint(
+async function applyPulledRevisions(
   state: State,
+  revisions: RemoteRevision[],
   localFiles: Map<string, LocalFile>,
-): Promise<LocalFile & { changedRemote: boolean }> {
-  const existing = await api<{ file: RemoteFile }>(state, "/api/memory/file?path=MEMORY.md").catch(
-    () => null,
-  );
-  const runnerIndex = localFiles.get("local/runner-memory/MEMORY.md");
-  const baseContent = runnerIndex ? rewriteRunnerMemoryLinks(runnerIndex.content) : "";
-  const baseLines = new Set(
-    baseContent
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean),
-  );
-  const existingLines = existing?.file.content.trim() ? existing.file.content.trim().split("\n") : [];
-  const preservedLines = existingLines.filter(
-    (line) =>
-      line.trim().length > 0 &&
-      line.trim() !== "## Mobile-created memories" &&
-      !baseLines.has(line.trim()) &&
-      !line.includes("](local/runner-memory/MEMORY.md)"),
-  );
-  const preserved = preservedLines.length > 0 ? `\n\n## Mobile-created memories\n${preservedLines.join("\n")}\n` : "";
-  const content = `${baseContent.trim()}${preserved}`.trim();
-  const finalContent = content ? `${content}\n` : "";
-  const changedRemote = existing?.file.content !== finalContent;
-  return {
-    path: "MEMORY.md",
-    content: finalContent,
-    hash: sha256(finalContent),
-    changedRemote,
-  };
-}
-
-function rewriteRunnerMemoryLinks(content: string): string {
-  return content.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, label: string, href: string) => {
-    if (/^(?:[a-z][a-z0-9+.-]*:|#|\/)/i.test(href)) return match;
-    if (href.startsWith("local/runner-memory/")) return match;
-    return `[${label}](local/runner-memory/${href})`;
-  });
-}
-
-async function applyPulledRevisions(revisions: RemoteRevision[]): Promise<void> {
+  locallyDeleted: Set<string>,
+): Promise<void> {
+  // Reduce to latest revision per path; older revisions in the same batch
+  // would just be overwritten anyway.
+  const latestByPath = new Map<string, RemoteRevision>();
   for (const rev of revisions) {
-    const target = join(PULL_TARGET, rev.path);
+    const existing = latestByPath.get(rev.path);
+    if (!existing || existing.id < rev.id) latestByPath.set(rev.path, rev);
+  }
+
+  for (const rev of latestByPath.values()) {
+    // User-initiated local delete takes precedence — let the push step
+    // upload the tombstone instead of resurrecting the file here.
+    if (locallyDeleted.has(rev.path) && rev.operation !== "delete") continue;
+
+    const absolute = join(MEMORY_ROOT, rev.path);
+    const local = localFiles.get(rev.path);
+    const knownState = state.files[rev.path];
+
     if (rev.operation === "delete") {
-      await rm(target, { force: true });
+      if (existsSync(absolute)) {
+        // Only delete if the local file matches the last we synced
+        // (otherwise the user has uncommitted local edits — let the next
+        // push round produce a recreate revision).
+        if (!local || (knownState && local.hash === knownState.localHash)) {
+          await rm(absolute, { force: true });
+          delete state.files[rev.path];
+        }
+      } else {
+        delete state.files[rev.path];
+      }
       continue;
     }
-    await mkdir(dirname(target), { recursive: true, mode: 0o700 });
-    await writeFile(target, rev.content, { mode: 0o600 });
+
+    // Local matches what we'd be writing — no-op write (mtime stable).
+    if (local && local.content === rev.content) {
+      state.files[rev.path] = {
+        localHash: local.hash,
+        lastSyncedRevisionId: rev.id,
+      };
+      continue;
+    }
+
+    // Local had no diverged edits since last sync — straight pull.
+    if (!local || (knownState && local.hash === knownState.localHash)) {
+      await mkdir(dirname(absolute), { recursive: true, mode: 0o700 });
+      await atomicWrite(absolute, rev.content);
+      state.files[rev.path] = {
+        localHash: sha256(rev.content),
+        lastSyncedRevisionId: rev.id,
+      };
+      continue;
+    }
+
+    // Local diverged AND remote diverged. Skip writing locally now — the
+    // push step will send our content with the prior base, and the server
+    // will run the three-way merge and tell us what to write.
   }
+}
+
+async function atomicWrite(path: string, content: string): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+  const tmp = join(tmpdir(), `runner-mem-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  await writeFile(tmp, content, { mode: 0o600 });
+  await rename(tmp, path);
 }
 
 async function api<T>(state: State, path: string, init: RequestInit = {}): Promise<T> {
@@ -333,6 +459,7 @@ async function installDaemon() {
 </plist>
 `;
   await writeFile(PLIST_PATH, plist, { mode: 0o600 });
+  await launchctl("unload", PLIST_PATH).catch(() => undefined);
   await launchctl("load", PLIST_PATH).catch(() =>
     launchctl("bootstrap", `gui/${process.getuid?.()}`, PLIST_PATH),
   );

@@ -1,9 +1,18 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import {
+  ACTIVE_TASK_STATUSES,
+  extractTaskMeta,
+  isTaskPath,
+  mergeFile,
+  type MergeOrigin,
+  type TaskMeta,
+  type TaskStatus,
+} from "@runner-mobile/tasks";
 import { pool } from "./client.ts";
 
 const MEMORY_ENTRYPOINT = "MEMORY.md";
 
-export type MemoryOrigin = "local" | "mobile" | "system";
+export type MemoryOrigin = "local" | "mobile" | "web" | "system";
 export type MemoryOperation = "create" | "write" | "delete";
 
 export type MemoryFileRecord = {
@@ -15,6 +24,7 @@ export type MemoryFileRecord = {
   revision: number;
   origin: string;
   deletedAt: Date | null;
+  taskMeta: TaskMeta | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -40,6 +50,7 @@ type DbMemoryFile = {
   revision: number;
   origin: string;
   deleted_at: Date | null;
+  task_meta: TaskMeta | null;
   created_at: Date;
   updated_at: Date;
 };
@@ -66,6 +77,7 @@ function toMemoryFile(row: DbMemoryFile): MemoryFileRecord {
     revision: row.revision,
     origin: row.origin,
     deletedAt: row.deleted_at,
+    taskMeta: row.task_meta,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -185,6 +197,7 @@ export async function writeMemoryFile(args: {
 }): Promise<MemoryFileRecord> {
   const path = normalizeMemoryPath(args.path);
   const contentHash = hashContent(args.content);
+  const taskMeta = extractTaskMetaSafe(path, args.content);
   const client = await pool.connect();
   try {
     await client.query("begin");
@@ -204,9 +217,9 @@ export async function writeMemoryFile(args: {
     const fileResult = await client.query<DbMemoryFile>(
       `
         insert into memory_files (
-          replica_id, path, content, content_hash, revision, origin, deleted_at, updated_at
+          replica_id, path, content, content_hash, revision, origin, deleted_at, task_meta, updated_at
         )
-        values ($1, $2, $3, $4, $5, $6, null, now())
+        values ($1, $2, $3, $4, $5, $6, null, $7::jsonb, now())
         on conflict (replica_id, path)
         do update set
           content = excluded.content,
@@ -214,19 +227,38 @@ export async function writeMemoryFile(args: {
           revision = excluded.revision,
           origin = excluded.origin,
           deleted_at = null,
+          task_meta = excluded.task_meta,
           updated_at = now()
         returning *
       `,
-      [args.replicaId, path, args.content, contentHash, nextRevision, args.origin],
+      [
+        args.replicaId,
+        path,
+        args.content,
+        contentHash,
+        nextRevision,
+        args.origin,
+        taskMeta ? JSON.stringify(taskMeta) : null,
+      ],
     );
+    const parentRevisionId = await latestRevisionIdForFile(client, args.replicaId, path);
     await client.query(
       `
         insert into memory_file_revisions (
-          replica_id, path, content, content_hash, file_revision, origin, operation
+          replica_id, path, content, content_hash, file_revision, origin, operation, parent_revision_id
         )
-        values ($1, $2, $3, $4, $5, $6, $7)
+        values ($1, $2, $3, $4, $5, $6, $7, $8)
       `,
-      [args.replicaId, path, args.content, contentHash, nextRevision, args.origin, operation],
+      [
+        args.replicaId,
+        path,
+        args.content,
+        contentHash,
+        nextRevision,
+        args.origin,
+        operation,
+        parentRevisionId,
+      ],
     );
     await client.query("commit");
 
@@ -239,6 +271,266 @@ export async function writeMemoryFile(args: {
   } finally {
     client.release();
   }
+}
+
+function extractTaskMetaSafe(path: string, content: string): TaskMeta | null {
+  try {
+    return extractTaskMeta(path, content);
+  } catch (err) {
+    console.warn("task frontmatter parse failed", { path, err });
+    return null;
+  }
+}
+
+type DbClient = {
+  query: <R extends Record<string, unknown>>(
+    text: string,
+    values?: unknown[],
+  ) => Promise<{ rows: R[]; rowCount: number | null }>;
+};
+
+async function latestRevisionIdForFile(
+  client: DbClient,
+  replicaId: number,
+  path: string,
+): Promise<number | null> {
+  const result = await client.query<{ id: number }>(
+    `
+      select id from memory_file_revisions
+      where replica_id = $1 and path = $2
+      order by id desc
+      limit 1
+    `,
+    [replicaId, path],
+  );
+  return result.rows[0]?.id ?? null;
+}
+
+export type SyncPushOutcome =
+  | { kind: "fast_forward"; file: MemoryFileRecord; latestRevisionRowId: number }
+  | { kind: "create"; file: MemoryFileRecord; latestRevisionRowId: number }
+  | { kind: "noop"; file: MemoryFileRecord; latestRevisionRowId: number }
+  | {
+      kind: "merged";
+      file: MemoryFileRecord;
+      latestRevisionRowId: number;
+      hadBodyConflict: boolean;
+      hadFrontmatterConflict: boolean;
+      notes: string[];
+    };
+
+/**
+ * Public helper: latest memory_file_revisions.id for a file (the global row
+ * counter, not the per-file counter). Used by the daemon to track its
+ * lastSyncedRevisionId for the three-way merge protocol.
+ */
+export async function getLatestRevisionRowIdForFile(
+  replicaId: number,
+  path: string,
+): Promise<number | null> {
+  const result = await pool.query<{ id: number }>(
+    `
+      select id from memory_file_revisions
+      where replica_id = $1 and path = $2
+      order by id desc
+      limit 1
+    `,
+    [replicaId, path],
+  );
+  return result.rows[0]?.id ?? null;
+}
+
+/**
+ * The bidirectional push primitive. Used by /api/memory/sync/push.
+ *
+ * If `baseRevisionId` is null, treats this as a create or unconditional
+ * overwrite (legacy clients without ancestry).
+ *
+ * If `baseRevisionId` matches the current head's parent (i.e. fast-forward),
+ * writes a new revision.
+ *
+ * If `baseRevisionId` is older than head, runs a three-way merge using the
+ * base, the current head, and the incoming content. Writes the merged
+ * content as a new revision with merge_parent_id set.
+ */
+export async function syncPushFile(args: {
+  replicaId: number;
+  path: string;
+  content: string;
+  origin: MemoryOrigin;
+  baseRevisionId: number | null;
+}): Promise<SyncPushOutcome> {
+  const path = normalizeMemoryPath(args.path);
+  const incomingHash = hashContent(args.content);
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const currentResult = await client.query<DbMemoryFile>(
+      `select * from memory_files where replica_id = $1 and path = $2 for update`,
+      [args.replicaId, path],
+    );
+    const current = currentResult.rows[0];
+
+    // No current row → first creation. Just insert.
+    if (!current) {
+      await client.query("commit");
+      client.release();
+      const file = await writeMemoryFile({
+        replicaId: args.replicaId,
+        path,
+        content: args.content,
+        origin: args.origin,
+      });
+      const latestRevisionRowId =
+        (await getLatestRevisionRowIdForFile(args.replicaId, path)) ?? 0;
+      return { kind: "create", file, latestRevisionRowId };
+    }
+
+    // Identical content already on head → noop.
+    if (!current.deleted_at && current.content_hash === incomingHash) {
+      await client.query("rollback");
+      const headRowId = (await getLatestRevisionRowIdForFile(args.replicaId, path)) ?? 0;
+      return { kind: "noop", file: toMemoryFile(current), latestRevisionRowId: headRowId };
+    }
+
+    const headRevId = await latestRevisionIdForFile(client, args.replicaId, path);
+
+    // No base supplied → legacy / first-write behavior, fast-forward.
+    if (args.baseRevisionId == null || args.baseRevisionId === headRevId) {
+      await client.query("rollback");
+      client.release();
+      const file = await writeMemoryFile({
+        replicaId: args.replicaId,
+        path,
+        content: args.content,
+        origin: args.origin,
+      });
+      const latestRevisionRowId =
+        (await getLatestRevisionRowIdForFile(args.replicaId, path)) ?? 0;
+      return { kind: "fast_forward", file, latestRevisionRowId };
+    }
+
+    // baseRevisionId is older than head → three-way merge.
+    const baseRevisionId: number = args.baseRevisionId;
+    const headRevision = headRevId == null ? null : await loadRevision(client, headRevId);
+    const baseRevision = await loadRevision(client, baseRevisionId);
+    if (!headRevision || !baseRevision) {
+      // Can't merge; fall back to fast-forward (last writer wins).
+      await client.query("rollback");
+      client.release();
+      const file = await writeMemoryFile({
+        replicaId: args.replicaId,
+        path,
+        content: args.content,
+        origin: args.origin,
+      });
+      const latestRevisionRowId =
+        (await getLatestRevisionRowIdForFile(args.replicaId, path)) ?? 0;
+      return { kind: "fast_forward", file, latestRevisionRowId };
+    }
+
+    const merged = mergeFile({
+      base: {
+        content: baseRevision.content,
+        origin: baseRevision.origin as MergeOrigin,
+        revisionTimestamp: baseRevision.created_at,
+      },
+      head: {
+        content: headRevision.content,
+        origin: headRevision.origin as MergeOrigin,
+        revisionTimestamp: headRevision.created_at,
+      },
+      incoming: {
+        content: args.content,
+        origin: args.origin as MergeOrigin,
+        revisionTimestamp: new Date(),
+      },
+    });
+
+    const mergedHash = hashContent(merged.mergedContent);
+    const taskMeta = extractTaskMetaSafe(path, merged.mergedContent);
+    const nextRevision = current.revision + 1;
+    const fileResult = await client.query<DbMemoryFile>(
+      `
+        update memory_files
+        set content = $3,
+            content_hash = $4,
+            revision = $5,
+            origin = $6,
+            deleted_at = null,
+            task_meta = $7::jsonb,
+            updated_at = now()
+        where replica_id = $1 and path = $2
+        returning *
+      `,
+      [
+        args.replicaId,
+        path,
+        merged.mergedContent,
+        mergedHash,
+        nextRevision,
+        args.origin,
+        taskMeta ? JSON.stringify(taskMeta) : null,
+      ],
+    );
+    const revInsert = await client.query<{ id: number }>(
+      `
+        insert into memory_file_revisions (
+          replica_id, path, content, content_hash, file_revision, origin,
+          operation, parent_revision_id, merge_parent_id
+        )
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        returning id
+      `,
+      [
+        args.replicaId,
+        path,
+        merged.mergedContent,
+        mergedHash,
+        nextRevision,
+        args.origin,
+        "write",
+        headRevId,
+        baseRevisionId,
+      ],
+    );
+    await client.query("commit");
+    const row = fileResult.rows[0];
+    if (!row) throw new Error("failed to write merged revision");
+    const latestRevisionRowId = revInsert.rows[0]?.id ?? 0;
+    return {
+      kind: "merged",
+      file: toMemoryFile(row),
+      latestRevisionRowId,
+      hadBodyConflict: merged.hadBodyConflict,
+      hadFrontmatterConflict: merged.hadFrontmatterConflict,
+      notes: merged.notes,
+    };
+  } catch (err) {
+    try {
+      await client.query("rollback");
+    } catch {
+      // ignore — connection may be released
+    }
+    throw err;
+  } finally {
+    try {
+      client.release();
+    } catch {
+      // already released above
+    }
+  }
+}
+
+async function loadRevision(
+  client: DbClient,
+  id: number,
+): Promise<DbMemoryRevision | null> {
+  const result = await client.query<DbMemoryRevision>(
+    `select * from memory_file_revisions where id = $1 limit 1`,
+    [id],
+  );
+  return result.rows[0] ?? null;
 }
 
 export async function editMemoryFile(args: {
@@ -290,6 +582,7 @@ export async function deleteMemoryFile(args: {
         set revision = $3,
             origin = $4,
             deleted_at = now(),
+            task_meta = null,
             updated_at = now()
         where replica_id = $1 and path = $2
         returning *
@@ -341,6 +634,97 @@ export async function searchMemoryFiles(args: {
     [args.replicaId, MEMORY_ENTRYPOINT, like, limit],
   );
   return result.rows.map(toMemoryFile);
+}
+
+/**
+ * List all task files for a replica. Includes done tasks; the caller filters
+ * by completed_at for the "done today" UI cutoff.
+ */
+export async function listTasks(replicaId: number): Promise<MemoryFileRecord[]> {
+  const result = await pool.query<DbMemoryFile>(
+    `
+      select *
+      from memory_files
+      where replica_id = $1
+        and deleted_at is null
+        and task_meta is not null
+      order by updated_at desc
+    `,
+    [replicaId],
+  );
+  return result.rows.map(toMemoryFile);
+}
+
+/**
+ * Find tasks across ALL replicas whose next_check_in is due. Used by the cron
+ * task sweep. Each row carries the replicaId so the caller can join back to
+ * the user.
+ */
+export async function findDueTasks(now: Date): Promise<MemoryFileRecord[]> {
+  const activeStatuses = ACTIVE_TASK_STATUSES.slice();
+  // Compare ISO strings lexically — same ordering as timestamptz when both
+  // are normalized to UTC (which our parser ensures). Lets us use the
+  // expression index on (task_meta->>'nextCheckIn').
+  const result = await pool.query<DbMemoryFile>(
+    `
+      select *
+      from memory_files
+      where deleted_at is null
+        and task_meta is not null
+        and (task_meta->>'status') = any($1::text[])
+        and (task_meta->>'nextCheckIn') is not null
+        and (task_meta->>'nextCheckIn') <= $2
+      order by replica_id asc, (task_meta->>'nextCheckIn') asc
+    `,
+    [activeStatuses as readonly string[], now.toISOString()],
+  );
+  return result.rows.map(toMemoryFile);
+}
+
+export type TaskStatusForQuery = TaskStatus;
+
+/**
+ * Backfill task_meta for any rows that have task-shaped paths but null cache.
+ * Idempotent — safe to run repeatedly.
+ */
+export async function backfillTaskMeta(): Promise<{ scanned: number; updated: number }> {
+  const result = await pool.query<DbMemoryFile>(
+    `
+      select *
+      from memory_files
+      where deleted_at is null
+        and path like 'tasks/%.md'
+    `,
+  );
+  let updated = 0;
+  for (const row of result.rows) {
+    const meta = extractTaskMetaSafe(row.path, row.content);
+    if (!meta && row.task_meta == null) continue;
+    const same = meta != null && row.task_meta != null && tasksEqual(meta, row.task_meta);
+    if (same) continue;
+    await pool.query("update memory_files set task_meta = $2::jsonb where id = $1", [
+      row.id,
+      meta ? JSON.stringify(meta) : null,
+    ]);
+    updated += 1;
+  }
+  return { scanned: result.rows.length, updated };
+}
+
+function tasksEqual(a: TaskMeta, b: TaskMeta): boolean {
+  return (
+    a.name === b.name &&
+    a.description === b.description &&
+    a.status === b.status &&
+    a.nextStep === b.nextStep &&
+    a.nextCheckIn === b.nextCheckIn &&
+    a.completedAt === b.completedAt
+  );
+}
+
+/** Helper used in tests — re-exposed for callers that already have a row. */
+export function isTaskFile(path: string): boolean {
+  return isTaskPath(path);
 }
 
 export async function pullMemoryRevisions(args: {
