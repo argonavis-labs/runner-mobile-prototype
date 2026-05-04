@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { runHeartbeatTicks } from "../session.ts";
+import { runHeartbeatTicks, runTaskCheckInTicks } from "../session.ts";
 import type { SpectrumApp } from "@runner-mobile/spectrum";
 
 export function makeCronRouter(getSpectrumApp: () => SpectrumApp | null): Router {
@@ -19,8 +19,15 @@ export function makeCronRouter(getSpectrumApp: () => SpectrumApp | null): Router
       return;
     }
 
-    const result = await runHeartbeatTicks(spectrumApp);
-    res.json(result);
+    // runTaskCheckInTicks reports back which users it already serviced this
+    // tick, so runHeartbeatTicks can either skip them (already woken) or
+    // batch the heartbeat into the same synthetic message via the shared
+    // session.
+    const taskTicks = await runTaskCheckInTicks(spectrumApp);
+    const heartbeatTicks = await runHeartbeatTicks(spectrumApp, {
+      skipUsers: taskTicks.runForPhones,
+    });
+    res.json({ task: taskTicks, heartbeat: heartbeatTicks });
   });
 
   return router;

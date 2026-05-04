@@ -1,5 +1,5 @@
 {
-  "name": "@runner-mobile/managed-agents",
+  "name": "@runner-mobile/tasks",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -12,11 +12,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.92.0",
-    "@runner-mobile/db": "workspace:*",
-    "@runner-mobile/runner-api": "workspace:*",
-    "@runner-mobile/tasks": "workspace:*",
-    "drizzle-orm": "^0.38.3"
+    "node-diff3": "^3.1.2"
   },
   "devDependencies": {
     "typescript": "^5.7.3"

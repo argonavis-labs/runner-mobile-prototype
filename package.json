@@ -12,6 +12,8 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "db:migrate": "sh -c 'set -a; [ ! -f .env ] || . ./.env; set +a; pnpm --filter @runner-mobile/db migrate'",
+    "tasks:backfill": "sh -c 'set -a; [ ! -f .env ] || . ./.env; set +a; tsx scripts/task-meta-backfill.ts'",
+    "e2e": "sh -c 'set -a; [ ! -f .env ] || . ./.env; set +a; tsx scripts/e2e/run.ts'",
     "dev": "sh -c 'set -a; [ ! -f .env ] || . ./.env; set +a; pnpm --filter @runner-mobile/server dev & pnpm --filter @runner-mobile/microsite dev & wait'",
     "dev:server": "sh -c 'set -a; [ ! -f .env ] || . ./.env; set +a; pnpm --filter @runner-mobile/server dev'",
     "dev:microsite": "pnpm --filter @runner-mobile/microsite dev",
@@ -28,6 +30,8 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
+    "@runner-mobile/db": "workspace:*",
+    "@runner-mobile/tasks": "workspace:*",
     "@types/node": "^22.10.0",
     "eslint": "^9.18.0",
     "prettier": "^3.4.2",

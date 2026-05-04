@@ -1,1 +1,1 @@
-{"root":["./src/api.ts","./src/state.ts","./src/app.tsx","./src/main.tsx"],"version":"5.9.3"}
+{"root":["./src/api.ts","./src/state.ts","./src/app.tsx","./src/main.tsx","./src/views/accounttab.tsx","./src/views/connectionstab.tsx","./src/views/phonelinkscreen.tsx","./src/views/taskstab.tsx"],"version":"5.9.3"}

@@ -1,6 +1,8 @@
 /**
  * Persisted auth state. Survives the OAuth round-trip (microsite → Composio →
- * microsite) via localStorage.
+ * microsite) via localStorage. The full bundle is needed both for the legacy
+ * Runner-backend calls (catalog, connect) and to mint the phone-link
+ * session on /api/app/phone/start.
  */
 
 const KEY = "runner-mobile-auth";

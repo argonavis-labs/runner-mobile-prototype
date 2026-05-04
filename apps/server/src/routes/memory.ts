@@ -6,13 +6,16 @@ import {
   editMemoryFile,
   ensureMemoryEntrypoint,
   getLatestMemoryRevisionId,
+  getLatestRevisionRowIdForFile,
   listMemoryFiles,
   pullMemoryRevisions,
   readMemoryFile,
   registerMemorySyncClient,
   revokeMemorySyncClient,
   searchMemoryFiles,
+  syncPushFile,
   writeMemoryFile,
+  type SyncPushOutcome,
 } from "@runner-mobile/db";
 import { listWorkspaces } from "@runner-mobile/runner-api";
 
@@ -47,8 +50,10 @@ const pushSchema = z.object({
       path: z.string().min(1),
       content: z.string().optional(),
       deleted: z.boolean().optional(),
+      base_revision_id: z.number().int().nonnegative().nullable().optional(),
     }),
   ),
+  protocol_version: z.number().int().optional(),
 });
 
 function bearer(req: Request): string | null {
@@ -204,7 +209,15 @@ memoryRouter.post("/sync/push", async (req: MemoryRequest, res) => {
     return;
   }
 
-  const changed = [];
+  const changed: Array<{
+    path: string;
+    outcome: SyncPushOutcome["kind"];
+    file: SyncPushOutcome["file"];
+    latestRevisionRowId: number;
+    hadBodyConflict?: boolean;
+    hadFrontmatterConflict?: boolean;
+    notes?: string[];
+  }> = [];
   for (const incoming of parsed.data.files) {
     try {
       if (incoming.deleted) {
@@ -212,30 +225,43 @@ memoryRouter.post("/sync/push", async (req: MemoryRequest, res) => {
           includeDeleted: true,
         });
         if (existing && !existing.deletedAt) {
-          changed.push(
-            await deleteMemoryFile({
-              replicaId: replicaId(req),
-              path: incoming.path,
-              origin: "local",
-            }),
-          );
+          const file = await deleteMemoryFile({
+            replicaId: replicaId(req),
+            path: incoming.path,
+            origin: "local",
+          });
+          const latestRevisionRowId =
+            (await getLatestRevisionRowIdForFile(replicaId(req), incoming.path)) ?? 0;
+          changed.push({
+            path: incoming.path,
+            outcome: "fast_forward",
+            file,
+            latestRevisionRowId,
+          });
         }
         continue;
       }
 
       const content = incoming.content ?? "";
-      const existing = await readMemoryFile(replicaId(req), incoming.path, {
-        includeDeleted: true,
+      const result = await syncPushFile({
+        replicaId: replicaId(req),
+        path: incoming.path,
+        content,
+        origin: "local",
+        baseRevisionId: incoming.base_revision_id ?? null,
       });
-      if (existing && !existing.deletedAt && existing.content === content) continue;
-      changed.push(
-        await writeMemoryFile({
-          replicaId: replicaId(req),
-          path: incoming.path,
-          content,
-          origin: "local",
-        }),
-      );
+      const entry: (typeof changed)[number] = {
+        path: incoming.path,
+        outcome: result.kind,
+        file: result.file,
+        latestRevisionRowId: result.latestRevisionRowId,
+      };
+      if (result.kind === "merged") {
+        entry.hadBodyConflict = result.hadBodyConflict;
+        entry.hadFrontmatterConflict = result.hadFrontmatterConflict;
+        entry.notes = result.notes;
+      }
+      changed.push(entry);
     } catch (err) {
       res.status(400).json({
         error: err instanceof Error ? err.message : "bad_request",

@@ -420,3 +420,682 @@ button.secondary:hover:not(:disabled) {
     transform: none;
   }
 }
+
+/* ── Mobile app shell (m-* namespace) ─────────────────────────────────────── */
+
+:root {
+  --m-bg: #fbfaf8;
+  --m-card: #ffffff;
+  --m-border: #e8e4df;
+  --m-text: #1d1b1b;
+  --m-muted: #6e6e6e;
+  --m-accent: #1d1b1b;
+  --m-accent-text: #fbfaf8;
+  --m-warn: #a0553a;
+  --m-tabbar-h: 64px;
+  --m-status-waiting-user: #a0553a;
+  --m-status-doing: #2c6f51;
+  --m-status-waiting-external: #6e6e6e;
+  --m-status-triage: #b18b3a;
+  --m-status-done: #9b9591;
+}
+
+html, body {
+  background: var(--m-bg);
+}
+
+/* Plain mobile screen — used for auth + phone-link, no tabbar */
+.m-screen {
+  min-height: 100vh;
+  padding: 28px 20px calc(28px + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.m-app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.m-app-main {
+  flex: 1;
+  padding-bottom: calc(var(--m-tabbar-h) + env(safe-area-inset-bottom) + 16px);
+}
+
+.m-spacer {
+  flex: 1;
+}
+
+.m-hero {
+  text-align: center;
+  padding: 24px 0 8px;
+}
+
+.m-logo-mark {
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  background: var(--m-accent);
+  color: var(--m-accent-text);
+  font-family: "Exposure", serif;
+  font-size: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 12px;
+}
+
+.m-heading {
+  font-family: "Exposure", serif;
+  font-size: 28px;
+  margin: 0;
+  letter-spacing: -0.5px;
+}
+
+.m-sub {
+  font-family: "Geist", sans-serif;
+  font-size: 15px;
+  color: var(--m-muted);
+  margin: 8px 0 0;
+}
+
+.m-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.m-label {
+  font-family: "Geist Mono", monospace;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--m-muted);
+}
+
+.m-error {
+  font-family: "Geist", sans-serif;
+  color: var(--m-warn);
+  font-size: 14px;
+  margin: 4px 0;
+}
+
+.m-muted {
+  font-family: "Geist", sans-serif;
+  color: var(--m-muted);
+  font-size: 14px;
+  margin: 0;
+}
+
+.m-splash {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  gap: 14px;
+}
+
+.m-splash-text {
+  font-family: "Geist Mono", monospace;
+  color: var(--m-muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+/* ── Mobile inputs / buttons ──────────────────────────────────────────────── */
+
+.m-screen input,
+.m-app input,
+.m-screen textarea,
+.m-app textarea {
+  width: 100%;
+  padding: 14px 16px;
+  font-family: "Geist", sans-serif;
+  font-size: 16px;
+  border: 1px solid var(--m-border);
+  border-radius: 14px;
+  background: var(--m-card);
+  color: var(--m-text);
+}
+
+.m-screen textarea,
+.m-app textarea {
+  resize: vertical;
+  min-height: 80px;
+  line-height: 1.4;
+}
+
+.m-btn {
+  width: 100%;
+  padding: 14px 22px;
+  font-family: "Geist", sans-serif;
+  font-size: 16px;
+  font-weight: 500;
+  border: none;
+  border-radius: 14px;
+  background: var(--m-accent);
+  color: var(--m-accent-text);
+  cursor: pointer;
+}
+
+.m-btn:disabled {
+  opacity: 0.5;
+}
+
+.m-btn-secondary {
+  background: var(--m-card);
+  color: var(--m-text);
+  border: 1px solid var(--m-border);
+}
+
+.m-btn-ghost {
+  background: transparent;
+  color: var(--m-muted);
+  border: none;
+  font-weight: 400;
+  text-decoration: underline;
+}
+
+.m-link-btn {
+  background: none;
+  border: none;
+  padding: 6px 0;
+  width: auto;
+  color: var(--m-muted);
+  font-family: "Geist", sans-serif;
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.m-link-btn-strong {
+  color: var(--m-accent);
+  font-weight: 500;
+}
+
+.m-iconbtn {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  font-size: 22px;
+  background: var(--m-card);
+  border: 1px solid var(--m-border);
+  color: var(--m-text);
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+.m-iconbtn-primary {
+  background: var(--m-accent);
+  color: var(--m-accent-text);
+  border: none;
+}
+
+/* ── Phone-link card ─────────────────────────────────────────────────────── */
+
+.m-link-card {
+  background: var(--m-card);
+  border: 1px solid var(--m-border);
+  border-radius: 18px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.m-link-step {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.m-link-num {
+  width: 22px;
+  height: 22px;
+  border-radius: 11px;
+  background: var(--m-accent);
+  color: var(--m-accent-text);
+  font-family: "Geist Mono", monospace;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.m-link-label {
+  font-family: "Geist Mono", monospace;
+  font-size: 11px;
+  color: var(--m-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.m-link-value {
+  font-family: "Geist", sans-serif;
+  font-size: 16px;
+  margin-top: 4px;
+}
+
+.m-link-tel {
+  color: var(--m-text);
+  text-decoration: underline;
+}
+
+.m-link-code {
+  font-family: "Geist Mono", monospace;
+  font-size: 36px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  color: var(--m-text);
+  margin-top: 4px;
+}
+
+.m-link-tip {
+  margin: 4px 0 0;
+}
+
+/* ── Tab bar ──────────────────────────────────────────────────────────────── */
+
+.m-tabbar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: calc(var(--m-tabbar-h) + env(safe-area-inset-bottom));
+  padding-bottom: env(safe-area-inset-bottom);
+  background: var(--m-card);
+  border-top: 1px solid var(--m-border);
+  display: flex;
+  z-index: 50;
+}
+
+.m-tabbtn {
+  flex: 1;
+  background: transparent;
+  border: none;
+  padding: 8px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  color: var(--m-muted);
+  cursor: pointer;
+  font-family: "Geist", sans-serif;
+  width: auto;
+}
+
+.m-tabbtn-active {
+  color: var(--m-accent);
+}
+
+.m-tabicon {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.m-tablabel {
+  font-size: 11px;
+  font-weight: 500;
+}
+
+/* ── Tasks tab ────────────────────────────────────────────────────────────── */
+
+.m-tasks, .m-tab {
+  padding: 24px 18px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.m-tasks-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.m-tasks-heading {
+  font-family: "Exposure", serif;
+  font-size: 32px;
+  margin: 0;
+  letter-spacing: -0.5px;
+}
+
+.m-tasks-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.m-tasks-empty {
+  margin: 32px 0;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.m-empty-heading {
+  font-family: "Exposure", serif;
+  font-size: 22px;
+  margin: 0;
+}
+
+.m-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.m-section-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 0 2px;
+}
+
+.m-section-title {
+  font-family: "Geist Mono", monospace;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--m-muted);
+  margin: 0;
+}
+
+.m-section-waiting_user .m-section-title {
+  color: var(--m-status-waiting-user);
+}
+
+.m-section-count {
+  font-family: "Geist Mono", monospace;
+  font-size: 11px;
+  color: var(--m-muted);
+}
+
+.m-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.m-card {
+  width: 100%;
+  text-align: left;
+  background: var(--m-card);
+  border: 1px solid var(--m-border);
+  border-radius: 14px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  cursor: pointer;
+  font-family: "Geist", sans-serif;
+}
+
+.m-section-waiting_user .m-card {
+  border-left: 3px solid var(--m-status-waiting-user);
+}
+
+.m-card-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.m-card-title {
+  font-family: "Exposure", serif;
+  font-size: 17px;
+  margin: 0;
+  color: var(--m-text);
+  letter-spacing: -0.2px;
+}
+
+.m-card-next {
+  margin: 0;
+  font-size: 14px;
+  color: var(--m-text);
+  line-height: 1.35;
+}
+
+.m-card-meta {
+  margin: 0;
+  font-family: "Geist Mono", monospace;
+  font-size: 11px;
+  color: var(--m-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.m-pill {
+  font-family: "Geist Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--m-bg);
+  color: var(--m-muted);
+  border: 1px solid var(--m-border);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.m-pill-runner {
+  background: #f1ece2;
+  color: var(--m-warn);
+  border-color: #e7ddc6;
+}
+
+.m-pill-status {
+  width: auto;
+  cursor: pointer;
+  background: var(--m-bg);
+  border: 1px solid var(--m-border);
+}
+
+.m-pill-active {
+  background: var(--m-accent);
+  color: var(--m-accent-text);
+  border-color: var(--m-accent);
+}
+
+/* ── Task detail / sheet ──────────────────────────────────────────────────── */
+
+.m-sheet {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 18, 18, 0.45);
+  z-index: 100;
+  display: flex;
+  align-items: stretch;
+  justify-content: stretch;
+  padding-top: env(safe-area-inset-top);
+}
+
+.m-sheet-card {
+  background: var(--m-bg);
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  border-top-left-radius: 18px;
+  border-top-right-radius: 18px;
+  overflow-y: auto;
+}
+
+.m-sheet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 18px 8px;
+  position: sticky;
+  top: 0;
+  background: var(--m-bg);
+  border-bottom: 1px solid var(--m-border);
+}
+
+.m-sheet-title {
+  font-family: "Exposure", serif;
+  font-size: 18px;
+  margin: 0;
+  letter-spacing: -0.3px;
+  text-align: center;
+  flex: 1;
+}
+
+.m-sheet-input {
+  margin: 16px 18px 0;
+}
+
+.m-sheet-textarea {
+  margin: 12px 18px 0;
+}
+
+.m-sheet-tip {
+  margin: 12px 18px;
+}
+
+.m-detail {
+  padding: 16px 18px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.m-detail-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.m-status-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.m-detail-input {
+  font-family: "Geist", sans-serif;
+}
+
+.m-detail-input-large {
+  min-height: 160px;
+  font-family: "Geist Mono", monospace;
+  font-size: 14px;
+}
+
+.m-detail-meta {
+  gap: 4px;
+}
+
+.m-detail-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* ── Connections tab ──────────────────────────────────────────────────────── */
+
+.m-conn-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.m-conn-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-align: left;
+  background: var(--m-card);
+  border: 1px solid var(--m-border);
+  border-radius: 14px;
+  padding: 12px 14px;
+  cursor: pointer;
+  font-family: "Geist", sans-serif;
+}
+
+.m-conn-row:disabled {
+  cursor: default;
+  opacity: 0.85;
+}
+
+.m-conn-connected {
+  border-color: rgba(74, 158, 88, 0.4);
+}
+
+.m-conn-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  object-fit: contain;
+  background: var(--m-bg);
+  padding: 4px;
+}
+
+.m-conn-icon-blank {
+  background: var(--m-border);
+}
+
+.m-conn-text {
+  flex: 1;
+}
+
+.m-conn-name {
+  font-family: "Exposure", serif;
+  font-size: 16px;
+  color: var(--m-text);
+  letter-spacing: -0.2px;
+}
+
+.m-conn-status {
+  font-family: "Geist Mono", monospace;
+  font-size: 11px;
+  color: var(--m-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.m-conn-connected .m-conn-status {
+  color: #4a9e58;
+}
+
+/* ── Account tab ──────────────────────────────────────────────────────────── */
+
+.m-account {
+  background: var(--m-card);
+  border: 1px solid var(--m-border);
+  border-radius: 14px;
+  margin: 0;
+  padding: 4px 16px;
+  display: flex;
+  flex-direction: column;
+}
+
+.m-account-row {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--m-border);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.m-account-row:last-child {
+  border-bottom: none;
+}
+
+.m-account-row dd {
+  margin: 0;
+  font-family: "Geist", sans-serif;
+  font-size: 15px;
+  color: var(--m-text);
+}

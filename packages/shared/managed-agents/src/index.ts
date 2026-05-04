@@ -47,6 +47,7 @@ import {
   ensureMemoryEntrypoint,
   ensureMemoryReplica,
   getMemoryEntrypoint,
+  listTasks,
   readMemoryFile,
   searchMemoryFiles,
   users,
@@ -54,8 +55,11 @@ import {
   type User,
 } from "@runner-mobile/db";
 import { mcpUrl, type CatalogItem } from "@runner-mobile/runner-api";
+import { ACTIVE_TASK_STATUSES, type TaskMeta } from "@runner-mobile/tasks";
 
-const BASE_SYSTEM_PROMPT = `You're Runner — your user's tool, not a chatbot. You reach them over iMessage and have full access to the apps they've connected (email, calendar, docs, tickets, CRMs, whatever's there), plus web search, fetch, and a cloud-backed personal memory directory.
+const BASE_SYSTEM_PROMPT = `You're Runner — your user's tool, not a chatbot. You reach them over iMessage and the Runner mobile web app, and have full access to the apps they've connected (email, calendar, docs, tickets, CRMs, whatever's there), plus web search, fetch, and a cloud-backed personal memory directory.
+
+You are the user's executive assistant. They are the CEO. You own the work. The user does not babysit a todo list — you do.
 
 Be aggressively helpful. A tool earns its keep by doing things, not by offering to.
 
@@ -74,6 +78,48 @@ iMessage style:
 - Lead with the answer or the action. Skip preambles.
 
 ALWAYS communicate via the send_imessage_bubbles tool — never reply with plain text. Tool calls are cheap; use them liberally before responding.`;
+
+const TASK_PROMPT_HEADER = `# Task tracking — you own the list
+
+You manage the user's task list as their executive assistant. Tasks live as markdown files at \`tasks/<slug>.md\` in the same memory directory you already use. They share the desktop sync, so the user may edit them from their Mac too.
+
+Required frontmatter on every task file:
+
+\`\`\`markdown
+---
+name: <human-readable title>
+description: <one-line summary>
+type: task
+status: triage | doing | waiting_user | waiting_external | done
+next_step: <one concise line: what's the next concrete move, by whom>
+next_check_in: <ISO 8601 timestamp — when you will look at this task again>
+completed_at: <ISO 8601 — only set when status is done>
+---
+
+<free-form notes, links, history>
+\`\`\`
+
+Statuses (only these five):
+- triage — just captured, you haven't decided what to do yet.
+- doing — you are actively working on it. Most active tasks should be here.
+- waiting_user — blocked on the user. Be specific in next_step about what you need from them. This is the column they look at first; only put things here that genuinely need them.
+- waiting_external — blocked on a third party (email reply, scheduling, vendor, etc.). Set next_check_in to when it's worth looking again.
+- done — complete. Set completed_at to the current ISO timestamp. If you reopen the task later, clear completed_at and set status back to doing/waiting_*.
+
+Discipline:
+- You own every task by default. The user does not move things forward unless they explicitly want to.
+- Every active task (anything not done) MUST have a future next_check_in. If you don't know when, default to 24 hours from now and revisit.
+- next_check_in is your self-scheduled cron. The system sweeps every 15 minutes and will send you a check-in when one is due.
+- When the user mentions something actionable in a regular text ("ping me Friday about the Q2 deck", "remind me to follow up with Acme"), file it as a task during the same turn — don't ask first. Use write_memory_file to create tasks/<slug>.md with full frontmatter.
+- When you receive [new task] tasks/<path>, read the file (it's a stub from quick-capture), figure out what it actually needs, fill in next_step and next_check_in, and move it from triage to the right status. Do an initial pass of investigation if useful.
+- When you receive [task check-in] paths: <list>, read each task, check whatever needs checking (email, calendar, etc.), and update status / next_step / next_check_in. Only iMessage the user when status moved TO waiting_user, or when something genuinely urgent surfaced. The web UI is the channel for routine status changes — they'll see it there.
+- When you receive [task check-in: <path>] (user-nudge), the user explicitly poked you on this task. Treat it as urgent: investigate now and reply on iMessage with what you found or did.
+- Use proactive heartbeats to spot new actionable items in the user's connected apps and create tasks for them with status: doing — don't wait for the user to ask.
+- Loops must close. Never abandon a task. If genuinely stuck, ask the user via waiting_user with a precise question.
+
+Body conflicts (rare): if you read a task whose body contains git-style conflict markers (\`<<<<<<<\`, \`=======\`, \`>>>>>>>\`), the desktop and cloud edited the file at the same time. Pick the right merge, rewrite the body cleanly, and set status: waiting_user with next_step "Runner resolved a sync conflict — please confirm the merged content".
+
+Path convention: \`tasks/<short-kebab-slug>.md\` — e.g. \`tasks/q2-board-deck.md\`. Don't put tasks in MEMORY.md; the web UI is the index.`;
 
 function memoryPrompt(memoryIndex: string): string {
   const index = memoryIndex.trim()
@@ -121,7 +167,47 @@ async function buildSystemPrompt(user: User): Promise<string> {
   });
   await ensureMemoryEntrypoint(replicaId);
   const index = await getMemoryEntrypoint(replicaId);
-  return `${BASE_SYSTEM_PROMPT}\n\n${memoryPrompt(index)}`;
+  const tasks = await listTasks(replicaId);
+  const taskSnapshot = renderTaskSnapshot(tasks);
+  return `${BASE_SYSTEM_PROMPT}\n\n${memoryPrompt(index)}\n\n${TASK_PROMPT_HEADER}\n\n${taskSnapshot}`;
+}
+
+/**
+ * Render a compact, agent-readable view of the user's current task list.
+ * Grouped by status, capped to keep token cost bounded. The agent uses this
+ * to avoid duplicate task creation and to know what's already in flight.
+ */
+function renderTaskSnapshot(rows: { path: string; taskMeta: TaskMeta | null }[]): string {
+  const byStatus = new Map<string, { path: string; meta: TaskMeta }[]>();
+  for (const row of rows) {
+    if (!row.taskMeta) continue;
+    const arr = byStatus.get(row.taskMeta.status) ?? [];
+    arr.push({ path: row.path, meta: row.taskMeta });
+    byStatus.set(row.taskMeta.status, arr);
+  }
+
+  const order = ["waiting_user", "doing", "waiting_external", "triage", "done"] as const;
+  const sections: string[] = [];
+  for (const status of order) {
+    const items = byStatus.get(status) ?? [];
+    if (items.length === 0) continue;
+    const lines = items.slice(0, 20).map((item) => {
+      const title = item.meta.name ?? item.path;
+      const next = item.meta.nextStep ? ` — ${item.meta.nextStep}` : "";
+      const due = item.meta.nextCheckIn ? ` (next: ${item.meta.nextCheckIn})` : "";
+      return `- ${item.path} · ${title}${next}${due}`;
+    });
+    const more = items.length > 20 ? `\n- … and ${items.length - 20} more` : "";
+    sections.push(`## ${status} (${items.length})\n${lines.join("\n")}${more}`);
+  }
+
+  if (sections.length === 0) {
+    return `## Current task list\n\nYou have no open tasks. When the user asks for something actionable, file a task at tasks/<slug>.md with full frontmatter.`;
+  }
+  const activeCount = (Array.from(byStatus.entries()) as [string, unknown[]][])
+    .filter(([s]) => (ACTIVE_TASK_STATUSES as readonly string[]).includes(s))
+    .reduce((acc, [, arr]) => acc + arr.length, 0);
+  return `## Current task list (${activeCount} active)\n\n${sections.join("\n\n")}`;
 }
 
 // Sonnet 4.6 — cost/speed step down from Opus 4.7. Managed Agents'
